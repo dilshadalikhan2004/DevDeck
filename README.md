@@ -6,6 +6,21 @@ DevDeck Pocket intercepts failed developer commands (tests, builds, scripts), tr
 
 ---
 
+## 📸 App Screenshots
+
+<p align="center">
+  <img src="screenshots/WhatsApp Image 2026-08-22 at 9.43.04 PM.jpeg" width="30%" />
+  <img src="screenshots/WhatsApp Image 2026-08-22 at 9.43.05 PM.jpeg" width="30%" />
+  <img src="screenshots/WhatsApp Image 2026-08-22 at 9.43.06 PM.jpeg" width="30%" />
+</p>
+<p align="center">
+  <img src="screenshots/WhatsApp Image 2026-08-22 at 9.43.08 PM.jpeg" width="30%" />
+  <img src="screenshots/WhatsApp Image 2026-08-22 at 9.43.09 PM (1).jpeg" width="30%" />
+  <img src="screenshots/WhatsApp Image 2026-08-22 at 9.43.09 PM.jpeg" width="30%" />
+</p>
+
+---
+
 ## 🏗️ Architecture Overview
 
 ```
