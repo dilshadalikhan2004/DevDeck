@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Redesign: Light Chrome Palette -->
+    <color name="color_bg_light">#F5F6F8</color>
+    <color name="color_surface">#FFFFFF</color>
+    <color name="color_surface_secondary">#FBFBFC</color>
+    <color name="color_border">#1415171C</color> <!-- 8% Alpha -->
+    <color name="color_ink">#15171C</color>
+    <color name="color_ink_soft">#565B66</color>
+    <color name="color_mist">#9297A1</color>
+
+    <!-- Accent: Teal -->
+    <color name="color_teal">#0B8A78</color>
+    <color name="color_teal_tint">#E6F5F2</color>
+    <color name="color_teal_border">#380B8A78</color> <!-- 22% Alpha -->
+
+    <!-- Accent: Amber -->
+    <color name="color_amber">#A9660A</color>
+    <color name="color_amber_tint">#FBF1E1</color>
+
+    <!-- Accent: Red -->
+    <color name="color_red">#B42318</color>
+    <color name="color_red_tint">#FDECEA</color>
+
+    <!-- Dark Code Panels -->
+    <color name="color_code_bg">#12151A</color>
+    <color name="color_code_surface">#1B1F26</color>
+    <color name="color_code_ink">#E7E9EE</color>
+    <color name="color_code_mist">#8B93A5</color>
+    <color name="color_code_signal">#5EEAD4</color> <!-- Mint Green -->
+
+    <!-- Syntax Highlighting -->
+    <color name="syntax_keyword">#C792EA</color> <!-- Purple -->
+    <color name="syntax_string">#89DDFF</color> <!-- Cyan -->
+    <color name="syntax_error">#FF8080</color> <!-- Red -->
+    <color name="syntax_function">#82AAFF</color> <!-- Blue -->
+    <color name="syntax_line_fail_bg">#1AFF6B6B</color> <!-- 10% Red -->
+
+    <!-- Compatibility/Originals -->
+    <color name="terminal_green">#5EEAD4</color>
+    <color name="terminal_red">#B42318</color>
+    <color name="terminal_gold">#A9660A</color>
+
+    <!-- Essential & Legacy Mappings -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="terminal_bg">@color/color_bg_light</color>
+    <color name="accent_blue">@color/color_teal</color>
+</resources>

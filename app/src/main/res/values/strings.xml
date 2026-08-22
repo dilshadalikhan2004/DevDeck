@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DevDeck Pocket</string>
+    <string name="tagline">Private, on-device debugging for the build moments that matter.</string>
+
+    <string name="model_ready">MODEL: READY</string>
+    <string name="model_offline">MODEL: OFFLINE</string>
+    <string name="model_error">MODEL: ERROR</string>
+
+    <string name="relay_connected">RELAY: CONNECTED</string>
+    <string name="relay_disconnected">RELAY: DISCONNECTED</string>
+    <string name="relay_error">RELAY: ERROR</string>
+
+    <string name="analyzing">ANALYZING ON-DEVICE...</string>
+    <string name="waiting_for_trace">[WAITING_FOR_TRACE]</string>
+
+    <string name="diag_header">DIAGNOSIS</string>
+    <string name="root_cause_label">ROOT CAUSE</string>
+    <string name="location_label">LOCATION</string>
+    <string name="fix_label">PROPOSED FIX</string>
+
+    <string name="npu_active">NPU ACTIVE</string>
+</resources>

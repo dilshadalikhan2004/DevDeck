@@ -1,0 +1,903 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/color_bg_light"
+    android:orientation="vertical">
+
+    <!-- Screen Switcher (Mockup Debug UI) -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
+        android:scrollbars="none">
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_pill_teal"
+            android:padding="4dp"
+            android:orientation="horizontal">
+            <Button
+                android:id="@+id/btnNavHome"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Home"
+                android:textAllCaps="false"
+                android:textColor="@color/color_teal"
+                android:backgroundTint="@color/color_teal_tint" />
+            <Button
+                android:id="@+id/btnNavTrace"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Trace"
+                android:textAllCaps="false"
+                android:textColor="@color/color_mist" />
+            <Button
+                android:id="@+id/btnNavDiag"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Diagnosis"
+                android:textAllCaps="false"
+                android:textColor="@color/color_mist" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <FrameLayout
+        android:id="@+id/screenContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <!-- ================= HOME SCREEN ================= -->
+        <ScrollView
+            android:id="@+id/screenHome"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="visible">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <FrameLayout
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:background="@drawable/bg_app_mark">
+                        <ImageView
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
+                            android:layout_gravity="center"
+                            android:src="@android:drawable/ic_menu_edit"
+                            app:tint="@color/color_code_signal" />
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Heading"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="DevDeck"
+                            android:textSize="17sp" />
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+                            <TextView
+                                style="@style/TextAppearance.DevDeck.Body"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Private debugging copilot"
+                                android:textSize="11sp" />
+                            <TextView
+                                android:id="@+id/liveTag"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:background="@drawable/bg_pill_teal"
+                                android:backgroundTint="#FF4B4B"
+                                android:paddingHorizontal="4dp"
+                                android:paddingVertical="1dp"
+                                android:text="LIVE"
+                                android:textColor="#FFFFFF"
+                                android:textSize="8sp"
+                                android:textStyle="bold"
+                                android:visibility="gone"
+                                tools:visibility="visible" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/agentModeSwitch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="AGENT"
+                        style="@style/TextAppearance.DevDeck.Mono"
+                        android:textColor="@color/color_mist"
+                        android:textSize="10sp"
+                        app:thumbTint="@color/color_teal"
+                        app:trackTint="@color/color_teal_border" />
+                </LinearLayout>
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="2dp"
+                    app:strokeColor="@color/color_border"
+                    app:strokeWidth="1dp">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="22dp">
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ON-DEVICE AI DEBUGGING"
+                            android:textColor="@color/color_teal"
+                            android:textSize="10sp" />
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Heading"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="Make the next\nbuild failure useful."
+                            android:textSize="25sp" />
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Body"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="Receive a trace from your laptop and get a clear explanation, location, and safe next step."
+                            android:textSize="13sp" />
+                        <ImageView
+                            android:layout_width="150dp"
+                            android:layout_height="50dp"
+                            android:layout_gravity="bottom|end"
+                            android:layout_marginEnd="-20dp"
+                            android:layout_marginBottom="-20dp"
+                            android:alpha="0.75"
+                            android:src="@drawable/ic_waveform" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:background="@drawable/bg_pill_teal"
+                            android:paddingHorizontal="12dp"
+                            android:paddingVertical="7dp"
+                            android:text="● Your code stays on your setup"
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:textColor="@color/color_teal"
+                            android:textSize="10.5sp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/demoButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="54dp"
+                    android:layout_marginTop="16dp"
+                    android:text="Run a live diagnosis"
+                    android:textAllCaps="false"
+                    android:textColor="@color/color_surface"
+                    style="@style/TextAppearance.DevDeck.Heading"
+                    android:textSize="14.5sp"
+                    app:backgroundTint="@color/color_ink"
+                    app:cornerRadius="14dp"
+                    app:icon="@android:drawable/ic_media_play"
+                    app:iconGravity="textStart"
+                    app:iconTint="@color/color_surface" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/setupButton"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginEnd="5dp"
+                        android:layout_weight="1"
+                        android:text="Pair laptop"
+                        android:textAllCaps="false"
+                        android:textColor="@color/color_ink"
+                        style="@style/TextAppearance.DevDeck.Body"
+                        app:backgroundTint="@color/color_surface"
+                        app:strokeColor="@color/color_border"
+                        app:strokeWidth="1dp"
+                        app:cornerRadius="12dp" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/historyButton"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_marginStart="5dp"
+                        android:layout_weight="1"
+                        android:text="Local history"
+                        android:textAllCaps="false"
+                        android:textColor="@color/color_ink"
+                        style="@style/TextAppearance.DevDeck.Body"
+                        app:backgroundTint="@color/color_surface"
+                        app:strokeColor="@color/color_border"
+                        app:strokeWidth="1dp"
+                        app:cornerRadius="12dp" />
+                </LinearLayout>
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    app:cardCornerRadius="14dp"
+                    app:strokeColor="@color/color_border"
+                    app:strokeWidth="1dp">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+                        <LinearLayout
+                            android:id="@+id/scanButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:background="?attr/selectableItemBackground"
+                            android:gravity="center_vertical"
+                            android:padding="14dp">
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:background="@color/color_surface_secondary"
+                                android:padding="8dp"
+                                android:src="@android:drawable/ic_menu_camera"
+                                app:tint="@color/color_ink_soft" />
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="12dp"
+                                android:layout_weight="1"
+                                android:text="Scan external screen"
+                                style="@style/TextAppearance.DevDeck.Body"
+                                android:textSize="13sp" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="›"
+                                android:textColor="@color/color_mist"
+                                android:textSize="18sp" />
+                        </LinearLayout>
+                        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/color_border" />
+                        <LinearLayout
+                            android:id="@+id/addContextButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:background="?attr/selectableItemBackground"
+                            android:gravity="center_vertical"
+                            android:padding="14dp">
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:background="@color/color_surface_secondary"
+                                android:padding="8dp"
+                                android:src="@android:drawable/ic_menu_add"
+                                app:tint="@color/color_ink_soft" />
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="12dp"
+                                android:layout_weight="1"
+                                android:text="Add project context"
+                                style="@style/TextAppearance.DevDeck.Body"
+                                android:textSize="13sp" />
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="›"
+                                android:textColor="@color/color_mist"
+                                android:textSize="18sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <TextView
+                    style="@style/TextAppearance.DevDeck.Mono"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:text="LATEST INCIDENT"
+                    android:textSize="10.5sp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/incidentPreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    app:cardCornerRadius="14dp"
+                    app:strokeColor="@color/color_border"
+                    app:strokeWidth="1dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:foreground="?attr/selectableItemBackground">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:padding="14dp">
+                        <View
+                            android:layout_width="4dp"
+                            android:layout_height="40dp"
+                            android:background="@color/color_red" />
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+                            <TextView
+                                android:id="@+id/incidentTitle"
+                                style="@style/TextAppearance.DevDeck.Body"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Waiting for incident..."
+                                android:textColor="@color/color_ink"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+                            <TextView
+                                android:id="@+id/incidentMeta"
+                                style="@style/TextAppearance.DevDeck.Mono"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Status: Idle"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="›"
+                            android:textColor="@color/color_mist"
+                            android:textSize="18sp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:baselineAligned="false"
+                    android:orientation="horizontal">
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_pill_teal"
+                        android:gravity="center_vertical"
+                        android:padding="11dp"
+                        android:id="@+id/modelStatusContainer">
+                        <View
+                            android:id="@+id/modelDot"
+                            android:layout_width="6dp"
+                            android:layout_height="6dp"
+                            android:background="@drawable/bg_pill_teal"
+                            android:backgroundTint="@color/color_teal" />
+                        <TextView
+                            android:id="@+id/modelStatus"
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="7dp"
+                            android:text="LOCAL AI: READY"
+                            android:textColor="@color/color_teal"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_pill_teal"
+                        android:backgroundTint="@color/color_red_tint"
+                        android:gravity="center_vertical"
+                        android:padding="11dp"
+                        android:id="@+id/relayStatusContainer">
+                        <View
+                            android:id="@+id/relayDot"
+                            android:layout_width="6dp"
+                            android:layout_height="6dp"
+                            android:background="@drawable/bg_pill_teal"
+                            android:backgroundTint="@color/color_red" />
+                        <TextView
+                            android:id="@+id/relayStatus"
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="7dp"
+                            android:text="RELAY: ERROR"
+                            android:textColor="@color/color_red"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/specBlock"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="32dp"
+                    android:background="@drawable/bg_pill_teal"
+                    android:backgroundTint="@color/color_surface_secondary"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone"
+                    tools:visibility="visible">
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Mono"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="INF-SPEC V1.0"
+                        android:textColor="@color/color_ink"
+                        android:textSize="9sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Mono"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="• Device: iQOO (Snapdragon 8 Gen 3)\n• Model: Gemma-2B-IT (INT4 Quantized)\n• Backend: MediaPipe GPU Delegate\n• Latency: 3.8s (Median) / 4.1s (P95)\n• Throughput: ~18.4 Tokens/sec"
+                        android:textColor="@color/color_mist"
+                        android:textSize="8sp"
+                        android:lineSpacingExtra="2dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- ================= TRACE SCREEN ================= -->
+        <LinearLayout
+            android:id="@+id/screenTrace"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="20dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="18dp">
+                <FrameLayout
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_app_mark">
+                    <ImageView
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:layout_gravity="center"
+                        android:src="@android:drawable/ic_menu_edit"
+                        app:tint="@color/color_code_signal" />
+                </FrameLayout>
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="11dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Heading"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Trace &amp; context"
+                        android:textSize="15sp" />
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Latest incident"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/tracePath"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_pill_teal"
+                    android:backgroundTint="@color/color_surface"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="7dp"
+                    android:text=".../target_bug.py"
+                    style="@style/TextAppearance.DevDeck.Mono"
+                    android:textSize="10.5sp"
+                    android:maxLines="1"
+                    android:ellipsize="middle" />
+                <TextView
+                    android:id="@+id/traceLine"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_pill_teal"
+                    android:backgroundTint="@color/color_amber_tint"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="7dp"
+                    android:text="LINE 2"
+                    style="@style/TextAppearance.DevDeck.Mono"
+                    android:textColor="@color/color_amber"
+                    android:textSize="10.5sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/color_surface"
+                android:padding="4dp"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/btnTabTrace"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="TRACE"
+                    android:textColor="@color/color_ink"
+                    android:backgroundTint="@color/color_surface_secondary" />
+                <Button
+                    android:id="@+id/btnTabSource"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="SOURCE"
+                    android:textColor="@color/color_mist" />
+            </LinearLayout>
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="300dp"
+                android:layout_marginTop="14dp"
+                android:background="@color/color_code_bg"
+                android:padding="16dp">
+                <TextView
+                    android:id="@+id/errorText"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/color_code_ink"
+                    android:textSize="11.8sp"
+                    android:lineSpacingExtra="8dp"
+                    android:text="Trace output here..." />
+                <TextView
+                    android:id="@+id/sourceText"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/color_code_ink"
+                    android:textSize="11.8sp"
+                    android:lineSpacingExtra="8dp"
+                    android:text="Source context here..."
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <TextView
+                style="@style/TextAppearance.DevDeck.Mono"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="WHAT DEVDECK SEES"
+                android:textSize="10.5sp" />
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                app:cardCornerRadius="14dp"
+                app:strokeColor="@color/color_border"
+                app:strokeWidth="1dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="14dp">
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="✓ File &amp; line resolved from daemon" />
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="✓ Model asked for one line only" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+        </LinearLayout>
+
+        <!-- ================= DIAGNOSIS SCREEN ================= -->
+        <ScrollView
+            android:id="@+id/screenDiag"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingBottom="18dp">
+                    <FrameLayout
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:background="@drawable/bg_app_mark">
+                        <ImageView
+                            android:layout_width="17dp"
+                            android:layout_height="17dp"
+                            android:layout_gravity="center"
+                            android:src="@android:drawable/ic_menu_edit"
+                            app:tint="@color/color_code_signal" />
+                    </FrameLayout>
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="11dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Heading"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Diagnosis"
+                            android:textSize="15sp" />
+                        <TextView
+                            android:id="@+id/diagTargetFile"
+                            style="@style/TextAppearance.DevDeck.Body"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Awaiting incident..."
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/loadingText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:layout_marginTop="8dp"
+                    android:text="Running on-device inference..."
+                    style="@style/TextAppearance.DevDeck.Mono"
+                    android:textColor="@color/color_teal"
+                    android:textSize="10sp"
+                    android:visibility="gone" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/diagnosisCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardCornerRadius="18dp"
+                    app:cardElevation="4dp"
+                    app:strokeColor="@color/color_border"
+                    app:strokeWidth="1dp"
+                    android:visibility="gone"
+                    tools:visibility="visible">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="18dp">
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingBottom="16dp">
+                            <TextView
+                                style="@style/TextAppearance.DevDeck.Heading"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Result"
+                                android:textSize="17sp" />
+                            <TextView
+                                android:id="@+id/inferenceTimeText"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:background="@drawable/bg_pill_teal"
+                                android:paddingHorizontal="10dp"
+                                android:paddingVertical="5dp"
+                                android:text="1.338s"
+                                style="@style/TextAppearance.DevDeck.Mono"
+                                android:textColor="@color/color_teal"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ROOT CAUSE"
+                            android:textColor="#3B6FD1"
+                            android:textSize="10sp" />
+                        <TextView
+                            android:id="@+id/causeText"
+                            style="@style/TextAppearance.DevDeck.Body"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:layout_marginBottom="16dp"
+                            android:text="Awaiting diagnosis..."
+                            android:textColor="@color/color_ink"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="WHERE TO LOOK"
+                            android:textColor="@color/color_amber"
+                            android:textSize="10sp" />
+                        <TextView
+                            android:id="@+id/locationText"
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:layout_marginBottom="16dp"
+                            android:text="-- : --"
+                            android:textColor="@color/color_ink_soft"
+                            android:textSize="12sp" />
+
+                        <TextView
+                            style="@style/TextAppearance.DevDeck.Mono"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="SAFE NEXT STEP"
+                            android:textColor="@color/color_teal"
+                            android:textSize="10sp" />
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:layout_marginBottom="16dp"
+                            android:background="@color/color_code_bg"
+                            android:orientation="vertical">
+                            <TextView
+                                android:id="@+id/diffRemoved"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:background="#19FF6B6B"
+                                android:padding="9dp"
+                                android:text="− "
+                                android:textColor="#FF9B9B"
+                                style="@style/TextAppearance.DevDeck.Mono"
+                                android:textSize="12sp" />
+                            <TextView
+                                android:id="@+id/diffAdded"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:background="#1A5EEAD4"
+                                android:padding="9dp"
+                                android:text="+ "
+                                android:textColor="@color/color_code_signal"
+                                style="@style/TextAppearance.DevDeck.Mono"
+                                android:textSize="12sp"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/repairButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Apply autonomous repair"
+                            android:textAllCaps="false"
+                            android:textColor="@color/color_teal"
+                            style="@style/TextAppearance.DevDeck.Heading"
+                            android:textSize="13.5sp"
+                            app:backgroundTint="@color/color_teal_tint"
+                            app:cornerRadius="12dp"
+                            app:strokeColor="@color/color_teal_border"
+                            app:strokeWidth="1dp"
+                            app:icon="@android:drawable/ic_menu_edit"
+                            app:iconGravity="textStart"
+                            app:iconTint="@color/color_teal" />
+
+                        <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="16dp" android:background="@color/color_border" />
+
+                        <LinearLayout
+                            android:id="@+id/telemetryLayout"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:orientation="horizontal">
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="34dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_pill_teal"
+                                android:backgroundTint="@color/color_bg_light" />
+                            <LinearLayout
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="14dp"
+                                android:orientation="horizontal">
+                                <TextView
+                                    android:id="@+id/tpsText"
+                                    style="@style/TextAppearance.DevDeck.Mono"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="TPS 27.3" />
+                                <TextView
+                                    android:id="@+id/memText"
+                                    style="@style/TextAppearance.DevDeck.Mono"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="14dp"
+                                    android:text="MEM 412MB" />
+                            </LinearLayout>
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <TextView
+                    style="@style/TextAppearance.DevDeck.Mono"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:text="LIVE PULSE CONSOLE"
+                    android:textSize="10.5sp" />
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@color/color_code_bg"
+                    android:padding="14dp">
+                    <ScrollView
+                        android:id="@+id/terminalScroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent">
+                        <TextView
+                            android:id="@+id/terminalText"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:textColor="@color/color_code_ink"
+                            android:textSize="11sp"
+                            android:lineSpacingExtra="4dp"
+                            android:text="[System] Awaiting logs..." />
+                    </ScrollView>
+                </FrameLayout>
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+</LinearLayout>

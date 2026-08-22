@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DevDeck Pocket — Autonomous Developer Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-base: #0c0e14;
+    --bg-surface: #141824;
+    --bg-card: #1c2236;
+    --border-dim: #262f48;
+    --accent-teal: #00e5a3;
+    --accent-blue: #38bdf8;
+    --accent-rose: #fb7185;
+    --accent-amber: #f59e0b;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 28px;
+  }
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border-dim);
+    margin-bottom: 24px;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .brand-icon {
+    width: 42px;
+    height: 42px;
+    background: linear-gradient(135deg, #00e5a3, #38bdf8);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    color: #0c0e14;
+    font-size: 20px;
+  }
+
+  .brand h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+  .brand p { font-size: 13px; color: var(--text-secondary); }
+
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0, 229, 163, 0.1);
+    color: var(--accent-teal);
+    border: 1px solid rgba(0, 229, 163, 0.3);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    background-color: var(--accent-teal);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--accent-teal);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.3); opacity: 0.6; }
+  }
+
+  .grid-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 24px;
+  }
+
+  .card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-dim);
+    border-radius: 16px;
+    padding: 20px;
+  }
+
+  .card-title {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .stat-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-dim);
+    border-radius: 12px;
+    padding: 14px;
+    text-align: center;
+  }
+
+  .stat-val { font-size: 24px; font-weight: 800; color: var(--accent-teal); }
+  .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; }
+
+  .console-view {
+    background: #08090d;
+    border: 1px solid var(--border-dim);
+    border-radius: 12px;
+    padding: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    height: 380px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+
+  .log-line { margin-bottom: 4px; }
+  .log-ts { color: var(--text-muted); margin-right: 8px; }
+  .log-ok { color: var(--accent-teal); }
+  .log-fail { color: var(--accent-rose); }
+  .log-agent { color: var(--accent-blue); }
+  .log-sys { color: var(--text-secondary); }
+
+  .incident-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-dim);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .incident-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .badge-tag {
+    background: rgba(251, 113, 133, 0.15);
+    color: var(--accent-rose);
+    border: 1px solid rgba(251, 113, 133, 0.3);
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .code-block {
+    background: #090a0f;
+    border: 1px solid #1e263d;
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: #e2e8f0;
+    overflow-x: auto;
+    margin-top: 8px;
+    white-space: pre-wrap;
+  }
+
+  .btn {
+    background: linear-gradient(135deg, #00e5a3, #02b683);
+    color: #0c0e14;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 229, 163, 0.3); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-dim);
+  }
+  .btn-ghost:hover { background: var(--bg-card); color: var(--text-primary); }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="brand">
+      <div class="brand-icon">D</div>
+      <div>
+        <h1>DevDeck Pocket Dashboard</h1>
+        <p>Real-Time On-Device AI Developer Co-Pilot Telemetry & Bridge</p>
+      </div>
+    </div>
+    <div class="status-badge" id="relayStatus">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">CONNECTING TO RELAY...</span>
+    </div>
+  </div>
+
+  <div class="grid-layout">
+    <!-- Left Sidebar: Controls & Stats -->
+    <div>
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="card-title">Live Telemetry</div>
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-val" id="statIncidents">0</div>
+            <div class="stat-label">Incidents</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="statRepairs">0</div>
+            <div class="stat-label">Repairs</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="statTPS">32.4</div>
+            <div class="stat-label">Avg TPS</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="statLatency">1.7s</div>
+            <div class="stat-label">Latency</div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <button class="btn" onclick="triggerStagedDemo()">🚀 Trigger Staged Demo</button>
+          <button class="btn btn-ghost" onclick="clearConsole()">Clear Logs</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Connected Devices</div>
+        <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
+          • <strong>Host Workstation:</strong> Connected via <code>ws://localhost:8765</code><br/>
+          • <strong>Target Phone:</strong> Paired via ADB Reverse USB / Wi-Fi<br/>
+          • <strong>Engine:</strong> On-Device MediaPipe Gemma-2B / Heuristic
+        </p>
+      </div>
+    </div>
+
+    <!-- Right Main Area: Live Incidents & Streaming Logs -->
+    <div>
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="card-title">
+          <span>Active Incident View</span>
+          <span class="badge-tag" id="incidentBadge">MONITORING</span>
+        </div>
+        <div id="incidentContainer">
+          <p style="color: var(--text-muted); font-size: 14px; font-style: italic;">
+            Waiting for failed command or test run from terminal (e.g. <code>python devdeck.py run "pytest"</code>)...
+          </p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Live Pulse Stream</div>
+        <div class="console-view" id="consoleLogs"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  let socket = null;
+  let incidentCount = 0;
+  let repairCount = 0;
+
+  function connect() {
+    const wsUrl = "ws://" + (window.location.hostname || "localhost") + ":8765";
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      document.getElementById('relayStatus').style.color = "var(--accent-teal)";
+      document.getElementById('statusText').innerText = "RELAY BRIDGE ACTIVE";
+      document.getElementById('statusDot').style.backgroundColor = "var(--accent-teal)";
+      appendLog("System", "WebSocket connected to DevDeck Bridge Relay Server (" + wsUrl + ")", "ok");
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleMessage(data);
+      } catch (e) {
+        appendLog("Raw", event.data, "sys");
+      }
+    };
+
+    socket.onclose = () => {
+      document.getElementById('relayStatus').style.color = "var(--accent-rose)";
+      document.getElementById('statusText').innerText = "DISCONNECTED - RETRYING";
+      document.getElementById('statusDot').style.backgroundColor = "var(--accent-rose)";
+      appendLog("Socket", "Relay connection closed. Reconnecting in 2s...", "fail");
+      setTimeout(connect, 2000);
+    };
+  }
+
+  function handleMessage(data) {
+    if (data.type === "log_stream") {
+      const line = data.log_line || "";
+      const type = line.includes("SUCCESS") ? "ok" : line.includes("FAILED") ? "fail" : line.includes("Agent") ? "agent" : "sys";
+      appendLog("Relay", line, type);
+      if (line.includes("PATCH APPLIED") || line.includes("SUCCESS after repair")) {
+        repairCount++;
+        document.getElementById('statRepairs').innerText = repairCount;
+      }
+    } else if (data.error_text) {
+      incidentCount++;
+      document.getElementById('statIncidents').innerText = incidentCount;
+      document.getElementById('incidentBadge').innerText = "INCIDENT #" + incidentCount;
+      renderIncident(data);
+      appendLog("Incident", `Received failure: ${data.error_file || 'target'} : ${data.error_line || 0}`, "fail");
+    }
+  }
+
+  function renderIncident(data) {
+    const container = document.getElementById('incidentContainer');
+    container.innerHTML = `
+      <div class="incident-card">
+        <div class="incident-header">
+          <strong>${data.error_file || 'unknown_file'} : Line ${data.error_line || '?'}</strong>
+          <span style="font-size: 12px; color: var(--text-muted);">${new Date(data.timestamp).toLocaleTimeString()}</span>
+        </div>
+        <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
+          Command: <code>${data.command || 'custom-run'}</code> | Language: <strong>${data.language || 'auto'}</strong>
+        </div>
+        <div class="code-block" style="border-left: 3px solid var(--accent-rose);">${data.error_text}</div>
+        ${data.source_context ? `
+          <div style="margin-top: 10px; font-size: 12px; font-weight: 700; color: var(--text-muted);">SOURCE CONTEXT:</div>
+          <div class="code-block" style="border-left: 3px solid var(--accent-blue);">${data.source_context}</div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  function appendLog(source, text, type = "sys") {
+    const box = document.getElementById('consoleLogs');
+    const ts = new Date().toLocaleTimeString();
+    const div = document.createElement('div');
+    div.className = 'log-line';
+    div.innerHTML = `<span class="log-ts">[${ts}]</span> <strong style="color: var(--text-muted);">[${source}]</strong> <span class="log-${type}">${text}</span>`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function clearConsole() {
+    document.getElementById('consoleLogs').innerHTML = '';
+  }
+
+  function triggerStagedDemo() {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        command: "demo-staged-bug",
+        error_file: "auth_service.py",
+        error_line: 42,
+        original_line: "if user.is_authenticated():",
+        error_text: "AttributeError: 'NoneType' object has no attribute 'is_authenticated'",
+        source_context: "38 | user = db.find_user(user_id)\n40 | print(f'Fetching token for {user_id}')\n>>> 42 | if user.is_authenticated():\n43 |     return user.token",
+        language: "python"
+      }));
+      appendLog("Client", "Dispatched Staged Demo Payload to paired ecosystem", "agent");
+    } else {
+      alert("Relay server is not connected.");
+    }
+  }
+
+  connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.DevDeck" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/color_ink</item>
+        <item name="android:statusBarColor">@color/color_bg_light</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@color/color_bg_light</item>
+        <item name="colorSurface">@color/color_surface</item>
+        <item name="colorOnSurface">@color/color_ink</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.DevDeck.AlertDialog</item>
+    </style>
+
+    <style name="ThemeOverlay.DevDeck.AlertDialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorSurface">@color/color_surface</item>
+        <item name="colorOnSurface">@color/color_ink</item>
+        <item name="colorPrimary">@color/color_ink</item>
+    </style>
+
+    <!-- Typography Styles -->
+    <style name="TextAppearance.DevDeck.Heading" parent="TextAppearance.MaterialComponents.Headline6">
+        <item name="android:fontFamily">sans-serif-medium</item> <!-- Fallback for Space Grotesk -->
+        <item name="android:textColor">@color/color_ink</item>
+        <item name="android:textSize">22sp</item>
+    </style>
+
+    <style name="TextAppearance.DevDeck.Body" parent="TextAppearance.MaterialComponents.Body2">
+        <item name="android:fontFamily">sans-serif</item> <!-- Fallback for Inter -->
+        <item name="android:textColor">@color/color_ink_soft</item>
+    </style>
+
+    <style name="TextAppearance.DevDeck.Mono" parent="TextAppearance.MaterialComponents.Caption">
+        <item name="android:fontFamily">monospace</item> <!-- Fallback for JetBrains Mono -->
+        <item name="android:letterSpacing">0.05</item>
+    </style>
+</resources>
