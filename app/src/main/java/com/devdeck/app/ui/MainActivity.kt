@@ -98,7 +98,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        initAgent()
+    }
+
     private fun setupActionButtons() {
+        binding.modelStatusContainer.setOnClickListener {
+            vibrate()
+            startActivity(Intent(this, ModelSettingsActivity::class.java))
+        }
         binding.demoButton.setOnClickListener { 
             vibrate()
             runDemo() 

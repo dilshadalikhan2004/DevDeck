@@ -29,5 +29,10 @@
             android:name=".ui.CameraActivity"
             android:theme="@style/Theme.DevDeck" />
 
+        <activity
+            android:name=".ui.ModelSettingsActivity"
+            android:label="Model Manager"
+            android:parentActivityName=".ui.MainActivity" />
+
     </application>
 </manifest>
