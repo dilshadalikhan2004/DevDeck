@@ -187,12 +187,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private var reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var reconnectRunnable: Runnable? = null
+
     private fun connectToRelay() {
+        cancelReconnect()
         webSocket?.cancel()
+        
+        // Keep screen active while app is paired for Desk Standby Mode
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         val relay = getSharedPreferences("devdeck", MODE_PRIVATE)
             .getString("relay_url", "ws://localhost:8765")!!
         val request = try { Request.Builder().url(relay).build() } catch (_: Exception) {
-            updateRelayStatus("INVALID", false)
+            updateRelayStatus("INVALID URL", false)
             return
         }
         val listener = object : WebSocketListener() {
@@ -200,6 +208,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     updateRelayStatus("CONNECTED", true)
                     binding.liveTag.visibility = View.VISIBLE
+                    appendToTerminal("[Bridge] Connected to $relay", "ok")
                 }
             }
 
@@ -213,18 +222,34 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     updateRelayStatus("DISCONNECTED", false)
                     binding.liveTag.visibility = View.GONE
+                    scheduleAutoReconnect()
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 runOnUiThread {
-                    updateRelayStatus(t.message ?: "ERROR", false)
+                    updateRelayStatus("RETRYING...", false)
                     binding.liveTag.visibility = View.GONE
-                    appendToTerminal("[Socket] Connection failed: ${t.message}")
+                    appendToTerminal("[Socket] Disconnected: ${t.message ?: "Connection lost"}", "fail")
+                    scheduleAutoReconnect()
                 }
             }
         }
         webSocket = client.newWebSocket(request, listener)
+    }
+
+    private fun scheduleAutoReconnect() {
+        cancelReconnect()
+        reconnectRunnable = Runnable {
+            appendToTerminal("[Bridge] Attempting auto-reconnect to relay...", "sys")
+            connectToRelay()
+        }
+        reconnectHandler.postDelayed(reconnectRunnable!!, 3000)
+    }
+
+    private fun cancelReconnect() {
+        reconnectRunnable?.let { reconnectHandler.removeCallbacks(it) }
+        reconnectRunnable = null
     }
 
     private fun updateRelayStatus(status: String, ok: Boolean) {
@@ -429,13 +454,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendRepair(result: com.devdeck.app.model.DiagnosticResult) {
-        val json = JSONObject().apply {
-            put("type", "repair")
-            put("file", result.repairFile)
-            put("line", result.repairLine)
-            put("code", result.repairCode)
+        val json = when (result.patchType) {
+            com.devdeck.app.model.PatchType.SINGLE_LINE -> JSONObject().apply {
+                put("type", "repair")
+                put("patch_type", "single_line")
+                put("file", result.repairFile)
+                put("line", result.repairLine)
+                put("code", result.repairCode)
+            }
+            com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
+                put("type", "repair")
+                put("patch_type", "diff")
+                put("file", result.repairFile)
+                put("diff_text", result.diffText)
+            }
         }
-        appendToTerminal("Sending repair payload to laptop...", "sys")
+        appendToTerminal("Sending ${result.patchType} repair to laptop...", "sys")
         val sent = webSocket?.send(json.toString()) ?: false
         if (sent) {
             appendToTerminal("Repair payload SENT successfully.", "ok")
@@ -497,6 +531,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        cancelReconnect()
         webSocket?.close(1000, "App destroyed")
     }
 }
