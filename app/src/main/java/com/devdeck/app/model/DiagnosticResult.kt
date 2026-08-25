@@ -1,5 +1,10 @@
 package com.devdeck.app.model
 
+enum class PatchType {
+    SINGLE_LINE,
+    DIFF
+}
+
 data class DiagnosticResult(
     val rootCause: String,
     val location: String,
@@ -11,5 +16,7 @@ data class DiagnosticResult(
     val repairFile: String? = null,
     val repairLine: Int? = null,
     val repairCode: String? = null,
-    val originalLine: String? = null
+    val originalLine: String? = null,
+    val patchType: PatchType = PatchType.SINGLE_LINE,
+    val diffText: String? = null
 )
