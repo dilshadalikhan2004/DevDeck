@@ -5,10 +5,12 @@ import os
 import subprocess
 import shutil
 from datetime import datetime
+from patch_manager import PatchManager
 
 connected_clients = set()
 last_command = None
 incident_history = []
+patch_manager = PatchManager()
 
 async def broadcast(message_dict, exclude=None):
     if not connected_clients:
@@ -39,9 +41,10 @@ async def relay(websocket):
                 # Check for repair payload from Phone / Web
                 if data.get("type") == "repair":
                     target_file = data.get("file", "")
-                    print(f"🛠️  [Agent] REPAIR RECEIVED for {target_file}")
+                    patch_type = data.get("patch_type", "single_line")
+                    print(f"🛠️  [Relay] REPAIR ({patch_type}): {target_file}")
 
-                    success, error_msg, file_path, backup_path = apply_repair_robust(data)
+                    success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, last_command)
 
                     if not success:
                         await broadcast({
@@ -52,67 +55,8 @@ async def relay(websocket):
 
                     await broadcast({
                         "type": "log_stream",
-                        "log_line": "📦 [Relay] PATCH APPLIED AND VERIFIED."
+                        "log_line": "✅ [Relay] PATCH APPLIED AND VERIFIED."
                     })
-
-                    if last_command:
-                        print("\n" + "🚀" * 20)
-                        print(f"🤖 [AGENTIC AI] RERUNNING MONITORED COMMAND...")
-                        print(f"COMMAND: {last_command}")
-                        print("🚀" * 20 + "\n")
-
-                        try:
-                            result = subprocess.run(
-                                last_command,
-                                shell=True,
-                                capture_output=True,
-                                text=True,
-                                timeout=8
-                            )
-                            status = "SUCCESS" if result.returncode == 0 else "FAILED"
-
-                            if status == "FAILED":
-                                print(f"❌ [Agent] RERUN FAILED. ROLLING BACK {file_path}")
-                                if backup_path and os.path.exists(backup_path):
-                                    shutil.copy2(backup_path, file_path)
-                                    print("📦 [Relay] Rolled back successfully after failed rerun.")
-                                    await broadcast({
-                                        "type": "log_stream",
-                                        "log_line": "❌ [Agent] RERUN FAILED: Fix didn't resolve error. File safely ROLLED BACK."
-                                    })
-                                else:
-                                    print("⚠️ [Relay] No backup found for rollback!")
-                                continue
-
-                            if "RecursionError" in (result.stderr or ""):
-                                print(f"❌ [Agent] RecursionError detected. Rolling back {file_path}")
-                                if backup_path and os.path.exists(backup_path):
-                                    shutil.copy2(backup_path, file_path)
-                                await broadcast({
-                                    "type": "log_stream",
-                                    "log_line": "❌ [Agent] FAILED: AI fix caused infinite recursion. ROLLED BACK."
-                                })
-                                continue
-
-                            log_msg = f"✅ [Agent] {status}: Command exited with code {result.returncode}."
-                            print(f"[Agent] RERUN RESULT: {status}")
-
-                            await broadcast({
-                                "type": "log_stream",
-                                "log_line": log_msg,
-                                "command_output": result.stdout or result.stderr
-                            })
-
-                        except subprocess.TimeoutExpired:
-                            print("[Agent] FAILED: Code execution timed out (potential infinite loop). ROLLING BACK.")
-                            if backup_path and os.path.exists(backup_path):
-                                shutil.copy2(backup_path, file_path)
-                            await broadcast({
-                                "type": "log_stream",
-                                "log_line": "❌ [Agent] FAILED: Code timed out (>8s). ROLLED BACK."
-                            })
-                        except Exception as e:
-                            print(f"[Relay] Rerun error: {e}")
                     continue
 
                 # Store command from devdeck.py
