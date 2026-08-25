@@ -3,6 +3,7 @@ package com.devdeck.app.ai
 import android.content.Context
 import android.util.Log
 import com.devdeck.app.model.DiagnosticResult
+import com.devdeck.app.model.PatchType
 import com.devdeck.app.model.ProjectContextManager
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import kotlinx.coroutines.Dispatchers
@@ -78,49 +79,65 @@ class DiagnosticAgent(private val context: Context) {
         // High-accuracy few-shot prompt optimized for small on-device SLMs (Gemma-2B)
         val prompt = """
             <start_of_turn>user
-            You are an autonomous code repair engine. Fix the single broken line of code to resolve the error.
+            You are an autonomous code repair engine. Fix the broken lines of code to resolve the error.
             $ruleContext
             STRICT RULES:
-            1. Output ONLY the replacement line of code between <<<FIX>>> and <<<END>>>.
-            2. The fix must be a valid single line of code.
+            1. Output EITHER a single-line fix between <<<FIX>>> and <<<END>>> OR a multi-line unified diff between <<<DIFF>>> and <<<END>>>.
+            2. For multi-line errors, output a unified diff format patch. Max 20 lines changed per diff.
             3. Do not invent new variable names; use existing identifiers: [$originalIds].
-            4. No explanation or commentary.
+            4. Include 1-2 lines of surrounding unchanged context in diffs starting with spaces. Deleted lines start with '-' and added lines start with '+'.
+            5. No explanation or commentary.
 
             FEW-SHOT EXAMPLES:
-            Example 1:
+            Example 1 (Single Line):
             Error: TypeError: can only concatenate str (not "NoneType") to str
             Target: print("User: " + user.name)
             <<<FIX>>>print("User: " + str(user.name))<<<END>>>
 
-            Example 2:
-            Error: AttributeError: 'NoneType' object has no attribute 'is_authenticated'
-            Target: if user.is_authenticated():
-            <<<FIX>>>if user and user.is_authenticated():<<<END>>>
+            Example 2 (Multi-line Diff):
+            Error: IndentationError: expected an indented block
+            Target Code Context:
+            def process(items):
+            for x in items:
+            do_work(x)
+            <<<DIFF>>>
+            @@ -1,3 +1,4 @@
+             def process(items):
+            -for x in items:
+            -do_work(x)
+            +    for x in items:
+            +        do_work(x)
+            <<<END>>>
 
-            Example 3:
-            Error: KeyError: 'token'
-            Target: token = payload['token']
-            <<<FIX>>>token = payload.get('token')<<<END>>>
+            Example 3 (Multi-line Diff):
+            Error: NameError: name 'user_id' is not defined
+            Target Code Context:
+            def log_user(user):
+                id = user.id
+                print(f"User: {user_id}")
+            <<<DIFF>>>
+            @@ -1,3 +1,3 @@
+             def log_user(user):
+            -    id = user.id
+            -    print(f"User: {user_id}")
+            +    id = user.id
+            +    print(f"User: {id}")
+            <<<END>>>
 
-            Example 4:
-            Error: ZeroDivisionError: division by zero
-            Target: avg = total / count
-            <<<FIX>>>avg = total / count if count else 0<<<END>>>
-
-            NOW FIX THIS:
+            NOW REPAIR THIS:
             Error:
             ${extractCleanError(errorText)}
             $contextSection
-            Target Line to replace:
+            Target Code Context:
             $originalLine
             <end_of_turn>
             <start_of_turn>model
-            <<<FIX>>>""".trimIndent()
-        
+            """.trimIndent()
+
         var response = ""
         val runtime = Runtime.getRuntime()
         val startMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
-        
+
         val duration = measureTimeMillis {
             try {
                 response = inference.generateResponse(prompt)
@@ -130,15 +147,14 @@ class DiagnosticAgent(private val context: Context) {
                 return@withContext fallback to 0L
             }
         }
-        
+
         val endMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
         val memUsage = maxOf(0, (endMem - startMem).toInt())
-        
+
         val tokenCount = response.length / 4f
         val tps = if (duration > 0) (tokenCount / (duration / 1000f)) else 0f
-        
-        val finalRaw = "<<<FIX>>>" + response
-        val result = parseResponse(finalRaw, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext)
+
+        val result = parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext)
         return@withContext result to duration
     }
 
@@ -181,8 +197,8 @@ class DiagnosticAgent(private val context: Context) {
     }
 
     private fun parseResponse(
-        raw: String, 
-        tps: Float, 
+        raw: String,
+        tps: Float,
         mem: Int,
         filePath: String?,
         lineNum: Int?,
@@ -191,7 +207,58 @@ class DiagnosticAgent(private val context: Context) {
         sourceContext: String?
     ): DiagnosticResult {
         return try {
-            // Flexible extraction: match <<<FIX>>> up to <<<END>>>, newline, <end_of_turn>, or end of string
+            // Try diff format first
+            val diffRegex = "<<<DIFF>>>([\\s\\S]*?)(?:<<<END>>>|<end_of_turn>|$)".toRegex()
+            val diffMatch = diffRegex.find(raw)
+
+            if (diffMatch != null) {
+                var diffText = diffMatch.groupValues[1].trim()
+
+                // Validate diff format
+                if (diffText.startsWith("@@")) {
+                    // Extract added lines for grounding check
+                    val addedLines = diffText.lines().filter { it.startsWith("+") && !it.startsWith("+++") }
+                    val addedContent = addedLines.joinToString("\n") { it.substring(1) }
+
+                    // Count changed lines (additions + deletions)
+                    val changedLineCount = diffText.lines().count { it.startsWith("+") || it.startsWith("-") }
+
+                    // Check line count limit (max 20)
+                    if (changedLineCount > 20) {
+                        Log.w("DevDeck", "Diff exceeds 20 line limit ($changedLineCount lines). Falling back.")
+                        return fallbackHeuristic(errorText, sourceContext, filePath, lineNum, originalLine, tps, mem)
+                    }
+
+                    // Semantic grounding check on added content
+                    val originalIds = originalLine?.let { extractIdentifiers(it) } ?: emptySet()
+                    val addedIds = extractIdentifiers(addedContent)
+                    val hallucinatedIds = addedIds - originalIds
+
+                    if (hallucinatedIds.isNotEmpty()) {
+                        Log.w("DevDeck", "Diff introduces ungrounded identifiers: $hallucinatedIds. Falling back.")
+                        return fallbackHeuristic(errorText, sourceContext, filePath, lineNum, originalLine, tps, mem)
+                    }
+
+                    Log.d("DevDeck", "Diff grounding passed. Changed lines: $changedLineCount")
+
+                    return DiagnosticResult(
+                        rootCause = "Multi-line diff repair suggested by on-device AI.",
+                        location = filePath ?: "Unclear",
+                        fix = "Applied unified diff patch",
+                        tokensPerSecond = tps,
+                        memoryUsageMB = mem,
+                        repairFile = filePath,
+                        repairLine = lineNum,
+                        repairCode = null,
+                        originalLine = originalLine,
+                        patchType = PatchType.DIFF,
+                        diffText = diffText,
+                        rawOutput = raw
+                    )
+                }
+            }
+
+            // Try single-line fix format (backward compatibility)
             val fixRegex = "<<<FIX>>>([\\s\\S]*?)(?:<<<END>>>|<end_of_turn>|$)".toRegex()
             val match = fixRegex.find(raw)
             var extractedFix = match?.groupValues?.get(1)?.trim()
@@ -208,12 +275,12 @@ class DiagnosticAgent(private val context: Context) {
             val fixIds = extractedFix?.let { extractIdentifiers(it) } ?: emptySet()
             val hallucinatedIds = (fixIds - originalIds)
             val hasNewIdentifiers = originalLine != null && extractedFix != null && hallucinatedIds.isNotEmpty()
-            
+
             val isSingleLine = extractedFix != null && !extractedFix.contains("\n") && !extractedFix.contains("\r")
             val isNotUnknown = extractedFix != null && extractedFix.uppercase() != "UNKNOWN" && extractedFix.isNotBlank()
             val isNotDuplicate = extractedFix != null && extractedFix != originalLine?.trim()
             val isGrounded = !hasNewIdentifiers
-            
+
             val isConfident = extractedFix != null && isSingleLine && isNotUnknown && isNotDuplicate && isGrounded
 
             Log.d("DevDeck", "Grounding: Orig=$originalIds, Fix=$fixIds, Hallucinated=$hallucinatedIds, IsGrounded=$isGrounded")
@@ -229,30 +296,43 @@ class DiagnosticAgent(private val context: Context) {
                     repairLine = lineNum,
                     repairCode = extractedFix,
                     originalLine = originalLine,
+                    patchType = PatchType.SINGLE_LINE,
                     rawOutput = raw
                 )
             } else {
                 // If AI was ungrounded or empty, invoke deterministic high-accuracy heuristic engine
                 Log.w("DevDeck", "AI fix unconfident or ungrounded ($hallucinatedIds). Falling back to heuristic synthesis.")
-                val heuristicResult = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
-                
-                DiagnosticResult(
-                    rootCause = if (hallucinatedIds.isNotEmpty()) "Heuristic repair applied (AI proposed ungrounded identifiers: $hallucinatedIds)." else heuristicResult.rootCause,
-                    location = heuristicResult.location,
-                    fix = heuristicResult.repairCode ?: heuristicResult.fix,
-                    tokensPerSecond = tps,
-                    memoryUsageMB = mem,
-                    repairFile = heuristicResult.repairFile ?: filePath,
-                    repairLine = heuristicResult.repairLine ?: lineNum,
-                    repairCode = heuristicResult.repairCode,
-                    originalLine = originalLine,
-                    rawOutput = raw
-                )
+                return fallbackHeuristic(errorText, sourceContext, filePath, lineNum, originalLine, tps, mem)
             }
         } catch (e: Exception) {
             Log.e("DevDeck", "parseResponse error: ${e.message}")
             HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
         }
+    }
+
+    private fun fallbackHeuristic(
+        errorText: String,
+        sourceContext: String?,
+        filePath: String?,
+        lineNum: Int?,
+        originalLine: String?,
+        tps: Float,
+        mem: Int
+    ): DiagnosticResult {
+        val heuristicResult = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
+        return DiagnosticResult(
+            rootCause = heuristicResult.rootCause,
+            location = heuristicResult.location,
+            fix = heuristicResult.repairCode ?: heuristicResult.fix,
+            tokensPerSecond = tps,
+            memoryUsageMB = mem,
+            repairFile = heuristicResult.repairFile ?: filePath,
+            repairLine = heuristicResult.repairLine ?: lineNum,
+            repairCode = heuristicResult.repairCode,
+            originalLine = originalLine,
+            patchType = PatchType.SINGLE_LINE,
+            rawOutput = ""
+        )
     }
 }
 
