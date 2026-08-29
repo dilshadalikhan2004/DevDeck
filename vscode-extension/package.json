@@ -1,0 +1,64 @@
+﻿{
+  "name": "devdeck-pocket",
+  "displayName": "DevDeck Pocket",
+  "description": "Autonomous on-device AI debugging co-pilot & code repair bridge for VS Code",
+  "version": "1.0.0",
+  "publisher": "devdeck",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Testing",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "copilot",
+    "debug",
+    "repair",
+    "on-device",
+    "mediapipe"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "devdeck.connect",
+        "title": "DevDeck: Connect to Relay Server"
+      },
+      {
+        "command": "devdeck.disconnect",
+        "title": "DevDeck: Disconnect Relay Server"
+      },
+      {
+        "command": "devdeck.triggerDemo",
+        "title": "DevDeck: Send Demo Error to Phone"
+      },
+      {
+        "command": "devdeck.diagnoseActiveFile",
+        "title": "DevDeck: Send Active File to Phone for Audit"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "DevDeck Pocket",
+      "properties": {
+        "devdeck.relayUri": {
+          "type": "string",
+          "default": "ws://localhost:8765",
+          "description": "WebSocket URI of the DevDeck Relay Server"
+        },
+        "devdeck.autoApplyRepairs": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically apply fixes received from paired device without confirmation modal"
+        }
+      }
+    }
+  }
+}
