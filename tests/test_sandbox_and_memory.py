@@ -56,6 +56,27 @@ class TestSandboxVerifier:
         assert trust.total_score >= 85
         assert trust.trust_level == "HIGH"
 
+    def test_sandbox_verification_applies_patch_when_target_is_absolute(self, tmp_path):
+        code_file = tmp_path / "calc.py"
+        code_file.write_text(
+            "def add(a, b):\n    return a - b\n\nif __name__ == '__main__':\n    assert add(2, 3) == 5\n",
+            encoding="utf-8",
+        )
+
+        proof, _ = SandboxVerifier.verify_patch(
+            project_root=tmp_path,
+            command=f'"{sys.executable}" calc.py',
+            patch_type="single_line",
+            target_file=str(code_file.resolve()),
+            line_num=2,
+            repair_code="return a + b",
+            allowed_symbols={"a", "b", "add"},
+        )
+
+        assert proof.sandbox_passed is True
+        assert proof.exit_code == 0
+        assert "return a - b" in code_file.read_text(encoding="utf-8")
+
     def test_sandbox_verification_fails_broken_patch(self, tmp_path):
         code_file = tmp_path / "calc.py"
         code_file.write_text("def add(a, b):\n    return a - b\n\nif __name__ == '__main__':\n    assert add(2, 3) == 5\n", encoding="utf-8")

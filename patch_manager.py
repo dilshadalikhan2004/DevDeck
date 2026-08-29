@@ -7,16 +7,31 @@ import re
 from pathlib import Path
 from datetime import datetime
 from sandbox_runner import SandboxRunner
+from subprocess_guard import isolated_env, run_command_isolated
 
 
 class PatchManager:
-    def __init__(self, backup_dir=".devdeck/snapshots"):
+    def __init__(self, backup_dir=".devdeck/snapshots", project_root=None):
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
+        self.project_root = Path(project_root or Path.cwd()).resolve()
 
-    def apply_repair(self, data, last_command=None, project_root=None):
+    @staticmethod
+    def _coerce_line(line) -> int | None:
+        if isinstance(line, bool) or line is None:
+            return None
+        if isinstance(line, float) and line.is_integer():
+            line = int(line)
+        if isinstance(line, int) and line >= 1:
+            return line
+        return None
+
+    def apply_repair(self, data, last_command=None, project_root=None, skip_preflight=False):
+        if project_root:
+            self.project_root = Path(project_root).resolve()
         patch_type = data.get("patch_type", "single_line")
         file_path = data.get("file", "")
+        data = {**data, "line": self._coerce_line(data.get("line")) or data.get("line")}
 
         if not os.path.exists(file_path):
             rel_path = os.path.basename(file_path)
@@ -25,7 +40,7 @@ class PatchManager:
             else:
                 return False, f"File not found: {file_path}", None, None
 
-        if data.get("protocol_version") == 2 and project_root:
+        if data.get("protocol_version") == 2 and project_root and not skip_preflight:
             candidate, error = self._candidate_content(data, file_path)
             if error:
                 return False, error, file_path, None
@@ -41,9 +56,9 @@ class PatchManager:
                 return False, f"Sandbox verification failed: {detail}", file_path, None
 
         if patch_type == "single_line":
-            return self.apply_single_line_repair(data, last_command, file_path)
+            return self.apply_single_line_repair(data, last_command, file_path, skip_integrity=skip_preflight)
         elif patch_type == "diff":
-            return self.apply_diff_patch(data, last_command, file_path)
+            return self.apply_diff_patch(data, last_command, file_path, skip_integrity=skip_preflight)
         else:
             return False, f"Unknown patch_type: {patch_type}", None, None
 
@@ -54,7 +69,7 @@ class PatchManager:
             return None, str(error)
 
         if data.get("patch_type", "single_line") == "single_line":
-            line_num = data.get("line")
+            line_num = self._coerce_line(data.get("line"))
             new_code = data.get("code", "")
             lines = original.splitlines(keepends=True)
             if not line_num or not new_code or not 1 <= line_num <= len(lines):
@@ -72,16 +87,16 @@ class PatchManager:
 
         return None, f"Unknown patch_type: {data.get('patch_type')}"
 
-    def apply_single_line_repair(self, data, last_command, file_path):
-        line_num = data.get("line")
+    def apply_single_line_repair(self, data, last_command, file_path, skip_integrity=False):
+        line_num = self._coerce_line(data.get("line"))
         new_code = data.get("code", "")
         expected_sha = data.get("expected_sha256")
 
         if not line_num or not isinstance(new_code, str):
             return False, "Invalid single-line payload", file_path, None
 
-        # 1. Integrity Check (SHA256)
-        if expected_sha:
+        # 1. Integrity Check (SHA256) — skip after a passing sandbox of the current tree
+        if expected_sha and not skip_integrity:
             current_sha = self._calculate_sha256(file_path)
             if current_sha != expected_sha:
                 return False, "Integrity check failed: file changed since diagnosis.", file_path, None
@@ -122,7 +137,7 @@ class PatchManager:
             self._restore_snapshot(file_path, snapshot_id)
             return False, str(e), file_path, snapshot_id
 
-    def apply_diff_patch(self, data, last_command, file_path):
+    def apply_diff_patch(self, data, last_command, file_path, skip_integrity=False):
         diff_text = data.get("diff_text")
         expected_sha = data.get("expected_sha256")
 
@@ -130,7 +145,7 @@ class PatchManager:
             return False, "No diff_text provided", file_path, None
 
         # 1. Integrity Check
-        if expected_sha:
+        if expected_sha and not skip_integrity:
             current_sha = self._calculate_sha256(file_path)
             if current_sha != expected_sha:
                 return False, "Integrity check failed: file changed since diagnosis.", file_path, None
@@ -288,33 +303,21 @@ class PatchManager:
     def rerun_command(self, command: str, timeout_seconds: int = 15) -> bool:
         print(f"[PatchManager] Rerunning command: {command}")
         try:
-            env = os.environ.copy()
-            py_paths = [str(self.project_root.resolve())]
-            if (self.project_root / "src").is_dir():
-                py_paths.append(str((self.project_root / "src").resolve()))
-            if env.get("PYTHONPATH"):
-                py_paths.append(env["PYTHONPATH"])
-            env["PYTHONPATH"] = os.pathsep.join(py_paths)
-            env["PYTHONUNBUFFERED"] = "1"
-            env["CI"] = "1"
-            env["DEBIAN_FRONTEND"] = "noninteractive"
-
-            result = subprocess.run(
+            root = getattr(self, "project_root", None) or Path.cwd()
+            exit_code, stdout, stderr, timed_out, _ = run_command_isolated(
                 command,
-                cwd=str(self.project_root),
-                shell=True,
-                capture_output=True,
-                text=True,
-                input="",
-                env=env,
-                timeout=timeout_seconds,
+                cwd=root,
+                timeout_seconds=timeout_seconds,
+                env=isolated_env(root),
             )
-            success = result.returncode == 0
-            print(f"[PatchManager] Rerun {'SUCCESS (Exit 0)' if success else f'FAILED (Exit {result.returncode})'}")
+            success = (not timed_out) and exit_code == 0
+            if timed_out:
+                print(f"[PatchManager] Rerun TIMEOUT (>{timeout_seconds}s)")
+            else:
+                print(f"[PatchManager] Rerun {'SUCCESS (Exit 0)' if success else f'FAILED (Exit {exit_code})'}")
+                if not success and (stderr or stdout):
+                    print((stderr or stdout)[-500:])
             return success
-        except subprocess.TimeoutExpired:
-            print(f"[PatchManager] Rerun TIMEOUT (>{timeout_seconds}s)")
-            return False
         except Exception as e:
             print(f"[PatchManager] Rerun error: {e}")
             return False

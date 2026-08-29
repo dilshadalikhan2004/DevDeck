@@ -30,6 +30,17 @@ data class CorrectionRequest(
     val previous: DiagnosticResult
 )
 
+data class BrainSnapshot(
+    val synced: Boolean = false,
+    val filesIndexed: Int = 0,
+    val symbolsIndexed: Int = 0,
+    val testsDiscovered: Int = 0,
+    val projectRoot: String = "",
+    val tests: List<String> = emptyList(),
+    val symbolsInPlay: List<String> = emptyList(),
+    val evidenceFiles: List<String> = emptyList()
+)
+
 data class AppState(
     val currentScreen: AppScreen = AppScreen.HOME,
     val repairState: RepairState = RepairState.IDLE,
@@ -58,7 +69,8 @@ data class AppState(
     val pipelines: PipelineRegistry = PipelineRegistry(),
     val selectedIncidentId: String? = null,
     val selectedStage: PipelineStage? = null,
-    val pendingReviewCount: Int = 0
+    val pendingReviewCount: Int = 0,
+    val brain: BrainSnapshot = BrainSnapshot()
 ) {
     val selectedPipeline: IncidentPipeline?
         get() = selectedIncidentId?.let { pipelines.byId[it] }
@@ -308,7 +320,47 @@ class MainViewModel : ViewModel() {
 
     fun addSandboxLine(line: String) {
         _uiState.update {
-            it.copy(sandboxLines = it.sandboxLines + line, sandboxRunning = true)
+            it.copy(
+                sandboxLines = (it.sandboxLines + line).takeLast(150),
+                sandboxRunning = true,
+                selectedStage = PipelineStage.SANDBOX_DRY_RUN
+            )
+        }
+    }
+
+    fun setBrainReady(
+        filesIndexed: Int,
+        symbolsIndexed: Int,
+        testsDiscovered: Int,
+        projectRoot: String,
+        tests: List<String>
+    ) {
+        _uiState.update {
+            it.copy(
+                brain = it.brain.copy(
+                    synced = true,
+                    filesIndexed = filesIndexed,
+                    symbolsIndexed = symbolsIndexed,
+                    testsDiscovered = testsDiscovered,
+                    projectRoot = projectRoot,
+                    tests = tests
+                ),
+                activeProject = projectRoot.substringAfterLast('\\').substringAfterLast('/').ifBlank { it.activeProject }
+            )
+        }
+        addLog("[Brain] Indexed $filesIndexed files · $symbolsIndexed symbols · $testsDiscovered tests")
+    }
+
+    fun mergeBrainFromIncident(symbols: List<String>, evidenceFiles: List<String>) {
+        _uiState.update {
+            val nextSymbols = (it.brain.symbolsInPlay + symbols.filter { s -> s.isNotBlank() }).distinct().take(40)
+            val nextFiles = (it.brain.evidenceFiles + evidenceFiles.filter { f -> f.isNotBlank() }).distinct().take(40)
+            it.copy(
+                brain = it.brain.copy(
+                    symbolsInPlay = nextSymbols,
+                    evidenceFiles = nextFiles
+                )
+            )
         }
     }
 

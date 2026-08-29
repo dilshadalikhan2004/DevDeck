@@ -6,7 +6,21 @@ import os
 import subprocess
 import sys
 import time
+import re
 from pathlib import Path
+
+
+def bind_command_to_interpreter(command: str) -> str:
+    """Run with this process's Python so Windows `python` store aliases cannot fail the rerun."""
+    stripped = command.strip()
+    match = re.match(
+        r"^(?:python(?:\d+(?:\.\d+)*)?|py(?:\s+-3(?:\.\d+)?)?)\b",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return stripped
+    return f'"{sys.executable}"{stripped[match.end():]}'
 
 
 def isolated_env(cwd: str | Path | None = None, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -58,8 +72,9 @@ def run_command_isolated(
     """
     start = time.time()
     run_env = env if env is not None else isolated_env(cwd)
+    bound = bind_command_to_interpreter(command)
     proc = subprocess.Popen(
-        command,
+        bound,
         cwd=str(cwd),
         shell=True,
         stdout=subprocess.PIPE,

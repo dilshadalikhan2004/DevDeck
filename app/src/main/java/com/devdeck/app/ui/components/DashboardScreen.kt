@@ -54,6 +54,23 @@ fun DashboardScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item { StatusHeaderColumn(state = state) }
+        if (state.sandboxRunning || state.sandboxLines.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "SANDBOX DRY-RUN",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 9.sp,
+                        letterSpacing = 1.5.sp
+                    )
+                    LiveSandboxConsole(
+                        lines = state.sandboxLines,
+                        running = state.sandboxRunning
+                    )
+                }
+            }
+        }
         item {
             GlassCard(modifier = Modifier.fillMaxWidth().heightIn(min = 280.dp), cornerRadius = 16.dp, contentPadding = 16.dp) {
                 Column {
@@ -97,6 +114,31 @@ fun DashboardScreen(
             }
         }
         item { RecentActionCard(modifier = Modifier.fillMaxWidth(), state = state, onViewLog = { onAction("history") }) }
+        if (state.telemetryLogs.isNotEmpty()) {
+            item {
+                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp, contentPadding = 12.dp) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "LAPTOP CONSOLE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 9.sp,
+                            letterSpacing = 1.5.sp
+                        )
+                        state.telemetryLogs.takeLast(12).forEach { line ->
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
         item { QuickActionGrid(onAction = onAction) }
     }
 }
@@ -453,18 +495,25 @@ fun RecentActionCard(
 @Composable
 fun QuickActionGrid(onAction: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            "These run on the paired laptop. Results stream into Laptop Console above.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             ExecutiveButton(
                 text = "New Shell",
                 icon = Icons.Default.Terminal,
                 onClick = { onAction("new_shell") },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                caption = "Print laptop cwd & how to run CLI"
             )
             ExecutiveButton(
                 text = "Sync DB",
                 icon = Icons.Default.Storage,
                 onClick = { onAction("sync_db") },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                caption = "Check pairing & repair memory"
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -472,14 +521,16 @@ fun QuickActionGrid(onAction: (String) -> Unit) {
                 text = "Run Tests",
                 icon = Icons.Default.PlayArrow,
                 onClick = { onAction("run_tests") },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                caption = "unittest discover on laptop"
             )
             ExecutiveButton(
                 text = "Deploy",
                 icon = Icons.Default.RocketLaunch,
                 onClick = { onAction("deploy") },
                 modifier = Modifier.weight(1f),
-                isPrimary = true
+                isPrimary = true,
+                caption = "Dry-run only — no publish"
             )
         }
     }

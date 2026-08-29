@@ -128,6 +128,10 @@ async def relay(websocket):
                     await websocket.send(json.dumps({"type": "pong", "timestamp": data.get("timestamp")}))
                     continue
 
+                if msg_type == "quick_action":
+                    await handle_quick_action(data)
+                    continue
+
                 # 1.2 Brain Ready Event
                 if msg_type == "brain_ready":
                     print(f"🧠 [Relay] Project Brain Ready ({data.get('files_indexed')} files, {data.get('symbols_indexed')} symbols)")
@@ -185,11 +189,22 @@ async def relay(websocket):
 
                     # Step A: Run in Sandbox Verifier with real-time streaming
                     project_root = incident_data.get("project_root", str(Path.cwd())) if incident_data else str(Path.cwd())
-                    
+
+                    async def emit_sandbox(line: str):
+                        stamped = f"{datetime.now().strftime('%H:%M:%S')}  {line}"
+                        print(f"  [Sandbox] {stamped}")
+                        await broadcast({"type": "sandbox_line", "line": stamped})
+
+                    await emit_sandbox(f"Creating throwaway copy of {project_root}")
+                    await emit_sandbox(f"Will rerun: {cmd_to_rerun or 'pytest'}")
+                    await emit_sandbox(f"Candidate target: {target_file}:{data.get('line')}")
+                    await emit_sandbox("Isolation: stdin closed, no live files, isolated PYTHONPATH")
+
                     def on_sandbox_line(line: str):
-                        print(f"  [Sandbox] {line}")
+                        stamped = f"{datetime.now().strftime('%H:%M:%S')}  {line}"
+                        print(f"  [Sandbox] {stamped}")
                         if main_loop and main_loop.is_running():
-                            asyncio.run_coroutine_threadsafe(broadcast({"type": "sandbox_line", "line": line}), main_loop)
+                            asyncio.run_coroutine_threadsafe(broadcast({"type": "sandbox_line", "line": stamped}), main_loop)
 
                     try:
                         proof, trust = await asyncio.to_thread(
@@ -263,7 +278,12 @@ async def relay(websocket):
                     if should_apply and proof.sandbox_passed:
                         print(f"🚀 [Relay] Applying patch to main workspace ({target_file})...")
                         await broadcast(make_event(incident_id or "unknown", "applying", "started", "Writing snapshot and patch to real files"))
-                        success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, cmd_to_rerun)
+                        success, error_msg, file_path, transaction_id = patch_manager.apply_repair(
+                            data,
+                            cmd_to_rerun,
+                            project_root=project_root,
+                            skip_preflight=True,
+                        )
 
                         if success:
                             repair_memory.save_verified_repair(
@@ -309,7 +329,14 @@ async def relay(websocket):
                                 incident_id or "unknown",
                                 "verifying",
                                 "failed",
-                                "Verification failed: original command did not exit 0",
+                                f"Verification failed: {error_msg}",
+                                detail=error_msg,
+                            ))
+                            await broadcast(make_event(
+                                incident_id or "unknown",
+                                "rolled_back",
+                                "failed",
+                                "Live files restored from snapshot",
                                 detail=error_msg,
                             ))
                             await broadcast({
@@ -359,6 +386,71 @@ async def relay(websocket):
         connected_clients.discard(websocket)
         authenticated_clients.discard(websocket)
         print(f"[Relay] Disconnected: {addr}. Remaining clients: {len(connected_clients)}")
+
+
+async def handle_quick_action(data: dict):
+    """Home-tab laptop actions. Does not enter the repair/sandbox apply path."""
+    command = str(data.get("command") or "").strip()
+    root = Path.cwd()
+
+    async def emit(line: str):
+        print(line)
+        await broadcast({"type": "log_stream", "log_line": line})
+
+    await emit(f"[Quick Action] {command} · cwd={root}")
+
+    if command == "new_shell":
+        await emit(f"$ cd {root}")
+        await emit(f"Host: {socket.gethostname()}  Python: {sys.executable}")
+        await emit("Open a terminal in that folder, then:")
+        await emit('  python devdeck.py run "python test_errors.py keyerror"')
+        await emit("This button does not spawn a GUI terminal; it attaches the existing relay session.")
+        return
+
+    if command == "sync_db":
+        pairing = Path(STATE_DIR) / "pairing_state.json"
+        mem_dir = Path(".devdeck")
+        await emit("Checking local DevDeck stores (no writes)...")
+        await emit(f"  pairing_state: {'present' if pairing.is_file() else 'missing'} ({pairing})")
+        await emit(f"  .devdeck dir: {'present' if mem_dir.is_dir() else 'not created yet'}")
+        await emit(f"  incidents held in this relay process: {len(incidents)}")
+        await emit("Phone History is the incident log. Laptop stores pairing + verified-repair memory.")
+        await emit("Sync check complete.")
+        return
+
+    if command == "run_tests":
+        from subprocess_guard import run_command_isolated
+
+        tests_dir = root / "tests"
+        cmd = (
+            'python -m unittest discover -s tests -p "test_*.py" -v'
+            if tests_dir.is_dir()
+            else "python -m unittest discover -v"
+        )
+        await emit(f"> {cmd}")
+        code, out, err, timed_out, ms = await asyncio.to_thread(
+            run_command_isolated,
+            cmd,
+            cwd=root,
+            timeout_seconds=90,
+        )
+        combined = (out or "") + (("\n" + err) if err else "")
+        for line in combined.splitlines()[-80:]:
+            if line.strip():
+                await emit(line)
+        if timed_out:
+            await emit("Tests timed out after 90s (process tree killed).")
+        await emit(f"Exit {code} in {ms}ms")
+        return
+
+    if command == "deploy":
+        await emit("Deploy dry-run: no production target is configured.")
+        await emit(f"Would package project: {root.name}")
+        await emit("Would skip: Play Store, CI publish, live file writes.")
+        await emit("To ship a code fix, Approve a candidate after a passing sandbox dry-run.")
+        return
+
+    await emit(f"Unknown quick action: {command}")
 
 
 main_loop: asyncio.AbstractEventLoop | None = None

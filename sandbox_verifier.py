@@ -69,6 +69,29 @@ BUILTIN_IDENTIFIERS = {
 }
 
 
+def sandbox_copy_of_target(project_root: Path, sandbox_root: Path, target_file: str | None) -> Path | None:
+    """Map a host path (relative or absolute) onto the throwaway sandbox copy.
+
+    On Windows, ``sandbox / "C:\\abs\\file.py"`` discards the sandbox prefix, so the
+    dry-run would patch the live file and still execute the unpatched copy.
+    """
+    if not target_file or target_file in {"unknown", "None", "null"}:
+        return None
+    root = project_root.resolve()
+    box = sandbox_root.resolve()
+    raw = Path(target_file)
+    try:
+        if raw.is_absolute():
+            rel = raw.resolve().relative_to(root)
+        else:
+            rel = Path(str(target_file).replace("\\", "/"))
+        dest = (box / rel).resolve()
+        dest.relative_to(box)
+    except (ValueError, OSError):
+        return None
+    return dest
+
+
 class SandboxVerifier:
     @staticmethod
     def verify_patch(
@@ -96,6 +119,8 @@ class SandboxVerifier:
         emit(f"> jest --config=jest.sandbox.config.js")
 
         root = canonical_project_root(project_root)
+        if isinstance(line_num, float) and line_num.is_integer():
+            line_num = int(line_num)
         try:
             target_path = resolve_project_file(root, target_file) if target_file and target_file != "unknown" else None
         except Exception:
@@ -143,7 +168,7 @@ class SandboxVerifier:
                 else:
                     shutil.copy2(item, dest)
 
-            sandbox_target = (sandbox_root / target_file.replace("\\", "/")) if target_file and target_file != "unknown" else None
+            sandbox_target = sandbox_copy_of_target(root.path, sandbox_root, target_file)
             sandbox_passed = False
             stdout = ""
             stderr = ""

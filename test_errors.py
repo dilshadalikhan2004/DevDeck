@@ -15,7 +15,7 @@ def trigger_attribute_error():
 def trigger_key_error():
     print("[Test] Triggering Python KeyError...")
     config = {"port": 8080}
-    print(config["database_url"])
+    print(config.get("database_url", None))
 
 def trigger_zero_division():
     print("[Test] Triggering Python ZeroDivisionError...")

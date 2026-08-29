@@ -37,7 +37,14 @@ import java.util.*
 // ── Brain Screen ──────────────────────────────────────────────────────────────
 
 @Composable
-fun BrainScreen() {
+fun BrainScreen(state: AppState) {
+    val brain = state.brain
+    val rows = buildList {
+        brain.evidenceFiles.forEach { add(Triple("file", it, if (brain.synced) "Evidence" else "From crash")) }
+        brain.symbolsInPlay.forEach { add(Triple("fn", it, "In play")) }
+        brain.tests.forEach { add(Triple("test", it, "Indexed")) }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -48,44 +55,71 @@ fun BrainScreen() {
             Spacer(modifier = Modifier.height(4.dp))
             Text("Knowledge Graph", style = MaterialTheme.typography.headlineLarge, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Text(
-                "Codebase semantic index and dependency analysis.",
+                if (brain.synced) brain.projectRoot.ifBlank { "Laptop project index" }
+                else "Run python devdeck.py scan on the laptop, or capture a crash to fill this index.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         item {
-            // Status banner
             GlassCard(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Box(modifier = Modifier.size(8.dp).background(Color(0xFF006e28), CircleShape))
-                    Text("Knowledge Graph Status: Synced", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(if (brain.synced) Color(0xFF006e28) else Color(0xFFE65100), CircleShape)
+                    )
+                    Text(
+                        if (brain.synced) "Knowledge Graph Status: Synced"
+                        else "Knowledge Graph Status: Waiting for scan",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         }
         item {
-            // Stats row
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                BrainStatCard("14,204", "NODES INDEXED", Color(0xFF0059b5), modifier = Modifier.weight(1f))
-                BrainStatCard("89,112", "EDGE CONNECTIONS", Color(0xFF006e28), modifier = Modifier.weight(1f))
+                BrainStatCard(
+                    if (brain.synced) brain.filesIndexed.toString() else "—",
+                    "FILES INDEXED",
+                    Color(0xFF0059b5),
+                    modifier = Modifier.weight(1f)
+                )
+                BrainStatCard(
+                    if (brain.synced) brain.symbolsIndexed.toString() else brain.symbolsInPlay.size.toString(),
+                    if (brain.synced) "SYMBOLS INDEXED" else "SYMBOLS IN PLAY",
+                    Color(0xFF006e28),
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                BrainStatCard("24", "DEAD ENDS", Color(0xFFBA1A1A), modifier = Modifier.weight(1f))
+                BrainStatCard(
+                    if (brain.synced) brain.testsDiscovered.toString() else "—",
+                    "TESTS DISCOVERED",
+                    Color(0xFFBA1A1A),
+                    modifier = Modifier.weight(1f)
+                )
                 GlassCard(modifier = Modifier.weight(1f)) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        Text("Run Garbage", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
-                        Text("Collection →", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = Color(0xFF0059b5))
+                        Text(state.activeProject.take(28), style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                        Text(
+                            if (state.isRelayConnected) "Relay live" else "Relay offline",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = Color(0xFF0059b5)
+                        )
                     }
                 }
             }
         }
         item {
-            // Dependency table header
             GlassCard(modifier = Modifier.fillMaxWidth(), contentPadding = 0.dp) {
                 Column {
                     Row(
@@ -97,18 +131,23 @@ fun BrainScreen() {
                         Text("STATUS", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     HorizontalDivider(color = LuminaDesign.HairlineStroke)
-                    listOf(
-                        Triple("class", "DiagnosticNode", "Healthy"),
-                        Triple("fn", "applyTaxLogic", "Synced"),
-                        Triple("import", "finance_utils", "Orphaned"),
-                        Triple("type", "HistoryItem", "Active")
-                    ).forEachIndexed { i, (type, symbol, status) ->
-                        if (i > 0) HorizontalDivider(color = LuminaDesign.HairlineStroke)
-                        DependencyRow(type, symbol, status)
+                    if (rows.isEmpty()) {
+                        Text(
+                            "Nothing indexed yet. On the laptop: python devdeck.py scan\nAfter a crash, allowed symbols and evidence files appear here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    } else {
+                        rows.take(40).forEachIndexed { i, (type, symbol, status) ->
+                            if (i > 0) HorizontalDivider(color = LuminaDesign.HairlineStroke)
+                            DependencyRow(type, symbol, status)
+                        }
                     }
                 }
             }
         }
+        item { Spacer(modifier = Modifier.height(48.dp)) }
     }
 }
 
@@ -129,6 +168,10 @@ fun DependencyRow(type: String, symbol: String, status: String) {
         "Synced" -> Color(0xFF0059b5)
         "Orphaned" -> Color(0xFFE65100)
         "Active" -> Color(0xFF006e28)
+        "Indexed" -> Color(0xFF0059b5)
+        "In play" -> Color(0xFF006e28)
+        "Evidence" -> Color(0xFFE65100)
+        "From crash" -> Color(0xFFE65100)
         else -> Color(0xFF616161)
     }
     Row(
@@ -164,11 +207,7 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
 
     val filtered = remember(searchQuery, historyItems) {
         if (searchQuery.isBlank()) historyItems
-        else historyItems.filter {
-            it.rootCause.contains(searchQuery, ignoreCase = true) ||
-            it.errorFile.contains(searchQuery, ignoreCase = true) ||
-            it.errorText.contains(searchQuery, ignoreCase = true)
-        }
+        else historyItems.filter { it.matchesHistoryQuery(searchQuery) }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -192,7 +231,7 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search logs...", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFAAAAAA)) },
+                    placeholder = { Text("KeyError, test_errors.py, FIXED…", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFAAAAAA)) },
                     leadingIcon = { Icon(Icons.Default.Search, null, tint = Color(0xFFAAAAAA), modifier = Modifier.size(18.dp)) },
                     singleLine = true,
                     modifier = Modifier.weight(1f).height(50.dp),
@@ -217,6 +256,28 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
                     Icon(Icons.Default.FilterList, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
                 }
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Search filename, exception (KeyError), status (FIXED / DIAGNOSED), patch text, or incident id.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("KeyError", "test_errors.py", "FIXED", "DIAGNOSED").forEach { chip ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (searchQuery == chip) Color(0xFFE3F2FD) else Color.White)
+                            .border(1.dp, LuminaDesign.HairlineStroke, RoundedCornerShape(16.dp))
+                            .clickable { searchQuery = chip }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(chip, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(16.dp))
         }
 
@@ -237,7 +298,15 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
                 if (historyItems.isEmpty()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        "Run a command through DevDeck CLI to capture incidents",
+                        "Run python devdeck.py run \"python test_errors.py keyerror\" then Approve a repair. Search later with KeyError, test_errors.py, or FIXED.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFAAAAAA),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                } else {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Try a chip above, or a substring of the file, exception, or incident id.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFAAAAAA),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -257,6 +326,31 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
             }
         }
     }
+}
+
+private fun HistoryItem.matchesHistoryQuery(raw: String): Boolean {
+    val q = raw.trim()
+    if (q.isEmpty()) return true
+    val statusHay = when (status) {
+        IncidentStatus.SOLVED -> "FIXED SOLVED"
+        IncidentStatus.FAILED -> "ROLLED BACK FAILED"
+        IncidentStatus.REPAIR_SENT -> "PATCH SENT REPAIR_SENT"
+        IncidentStatus.SUPERSEDED -> "SUPERSEDED"
+        IncidentStatus.DIAGNOSED -> "DIAGNOSED"
+        IncidentStatus.DETECTED -> "DETECTED"
+    }
+    val hay = listOf(
+        incidentId,
+        errorFile,
+        "$errorFile:$errorLine",
+        errorText,
+        rootCause,
+        repairCode.orEmpty(),
+        diffText.orEmpty(),
+        status.name,
+        statusHay
+    ).joinToString("\n")
+    return hay.contains(q, ignoreCase = true)
 }
 
 @Composable
@@ -646,6 +740,70 @@ fun SandboxTerminalLine(line: String) {
         }
         else -> {
             Text(line, style = MaterialTheme.typography.labelSmall, color = Color(0xFFCCCCCC), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+fun LiveSandboxConsole(
+    lines: List<String>,
+    running: Boolean,
+    title: String = "sandbox dry-run",
+    modifier: Modifier = Modifier
+) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(lines.size) {
+        if (lines.isNotEmpty()) scroll.animateScrollTo(scroll.maxValue)
+    }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, LuminaDesign.HairlineStroke, RoundedCornerShape(12.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFFEDEDED))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(modifier = Modifier.size(10.dp).background(Color(0xFFFF5F57), CircleShape))
+            Box(modifier = Modifier.size(10.dp).background(Color(0xFFFFBD2E), CircleShape))
+            Box(modifier = Modifier.size(10.dp).background(Color(0xFF28C840), CircleShape))
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                if (running) "$title · live" else title,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF666666),
+                fontSize = 10.sp
+            )
+            Spacer(modifier = Modifier.weight(1f))
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .background(Color(0xFF1E1E1E))
+                .verticalScroll(scroll)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            if (lines.isEmpty()) {
+                Text(
+                    if (running) "Waiting for sandbox output…" else "Approve a candidate to stream the throwaway dry-run here.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF888888),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                )
+            } else {
+                lines.forEach { SandboxTerminalLine(it) }
+                if (running) {
+                    Text("▍", style = MaterialTheme.typography.labelSmall, color = Color(0xFF00E676), fontFamily = FontFamily.Monospace)
+                }
+            }
         }
     }
 }

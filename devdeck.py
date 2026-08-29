@@ -50,6 +50,78 @@ async def send_events(payloads: list[dict]):
         pass
 
 
+def _watch_outcome(data: dict, incident_id: str) -> str | None:
+    if data.get("incident_id") and data.get("incident_id") != incident_id:
+        if data.get("type") not in ("sandbox_line", "log_stream"):
+            return None
+    kind = data.get("type")
+    if kind == "sandbox_line":
+        line = (data.get("line") or "").rstrip()
+        if line:
+            print(f"  [Sandbox] {line}")
+        return None
+    if kind == "log_stream":
+        line = (data.get("log_line") or "").rstrip()
+        if line:
+            print(f"  {line}")
+        return None
+    if kind == "repair_success":
+        print("✅ Repair applied and verified on disk.")
+        return "success"
+    if kind == "repair_failed":
+        print(f"❌ Live apply/verify failed: {data.get('message')}")
+        return "failed"
+    if kind != "pipeline_event":
+        return None
+    stage = data.get("stage")
+    phase = data.get("phase")
+    message = data.get("message") or ""
+    print(f"  [{stage} {phase}] {message}")
+    if stage == "complete" and phase == "completed":
+        return "success"
+    if stage == "rolled_back" or (stage == "verifying" and phase == "failed"):
+        return "failed"
+    if phase == "review_rejected" or (stage == "awaiting_review" and phase == "failed"):
+        return "rejected"
+    if stage == "diagnosing" and phase == "failed":
+        return "failed"
+    if stage == "awaiting_review" and phase == "completed":
+        print("  → Approve, Reject, or Request Changes on the phone. This terminal will wait.")
+    return None
+
+
+async def dispatch_and_wait(payloads: list[dict], incident_id: str, timeout_seconds: float) -> str:
+    """Send incident traffic then stay on the socket until the phone/relay finishes."""
+    uri = os.environ.get("DEVDECK_RELAY_URI", "ws://localhost:8765")
+    try:
+        async with websockets.connect(uri) as websocket:
+            for payload in payloads:
+                await websocket.send(json.dumps(payload))
+            print("● Waiting for phone review / repair result. Ctrl+C detaches without cancelling.")
+            print("=" * 65)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout_seconds
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    print("⏱️ Timed out waiting for the phone. Incident is still active on the relay.")
+                    return "timeout"
+                raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                outcome = _watch_outcome(data, incident_id)
+                if outcome:
+                    return outcome
+    except asyncio.TimeoutError:
+        print("⏱️ Timed out waiting for the phone. Incident is still active on the relay.")
+        return "timeout"
+    except Exception as error:
+        print(f"⚠️ Could not wait on relay ({error}). Incident was dispatched.")
+        return "disconnected"
+
+
 def detect_language(file_path: str | None) -> str:
     if not file_path:
         return "unknown"
@@ -304,6 +376,7 @@ def scan_repository(project_root: str | Path | None = None) -> None:
         "symbols_indexed": summary["symbols_indexed"],
         "tests_discovered": summary["tests_discovered"],
         "tests": summary["tests"],
+        "sample_symbols": sorted(brain.symbols.keys())[:30],
     }))
 
 
@@ -381,6 +454,11 @@ def run_command_with_watch(command: str) -> int:
     process.wait()
     combined_output = "".join(captured)
 
+    if process.returncode == 0:
+        print("=" * 65)
+        print("✅ [DevDeck] Command exited 0 — no crash, so nothing was sent to the phone.")
+        return 0
+
     if process.returncode != 0:
         print("=" * 65)
         print(f"❌ [DevDeck] Command failed (Exit Code: {process.returncode}). Analyzing incident...")
@@ -429,9 +507,29 @@ def run_command_with_watch(command: str) -> int:
                 payload["validation_message"],
                 detail=payload.get("error_text"),
             ))
-        asyncio.run(send_events(events))
+            asyncio.run(send_events(events))
+        else:
+            wait_s = float(os.environ.get("DEVDECK_WAIT_SECONDS", "600"))
+            try:
+                outcome = asyncio.run(dispatch_and_wait(events, payload["incident_id"], wait_s))
+            except KeyboardInterrupt:
+                print("\n● Detached. The phone can still finish this repair.")
+                outcome = "detached"
+            if outcome == "success":
+                memory.log_incident(
+                    incident_id=payload["incident_id"],
+                    command=command,
+                    error_file=payload.get("error_file") or "unknown",
+                    error_line=payload.get("error_line") or 0,
+                    error_text=payload["error_text"],
+                    context_receipt=receipt,
+                    candidate_patch=None,
+                    repair_proof=None,
+                    trust_breakdown=None,
+                    status="SOLVED",
+                )
+                return 0
 
-        # Log incident in memory
         memory.log_incident(
             incident_id=payload["incident_id"],
             command=command,
