@@ -482,7 +482,11 @@ fun DiffLine(text: String, isRemoved: Boolean = false, isAdded: Boolean = false)
 }
 
 @Composable
-fun RepairSuccessScreen(onDone: () -> Unit) {
+fun RepairSuccessScreen(
+    command: String? = null,
+    success: Boolean = true,
+    onDone: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -519,6 +523,9 @@ fun RepairSuccessScreen(onDone: () -> Unit) {
                 SuccessDetail("Sandbox Environment", "Isolated Pass (100%)")
                 SuccessDetail("Regression Test Suite", "6 Passed")
                 SuccessDetail("Main Workspace", "Patched & Verified")
+                if (!command.isNullOrBlank()) {
+                    SuccessDetail("Command Rerun", if (success) "Exit Code 0 ✓" else "Failed")
+                }
                 SuccessDetail("Audit Memory", "Persisted")
             }
         }

@@ -102,9 +102,14 @@ class DiagnosticAgent(private val context: Context?) {
         }
 
         val inference = llmInference
+        val constrainedTrace = if (!developerConstraint.isNullOrBlank()) {
+            "$errorText\nDeveloper correction: $developerConstraint"
+        } else {
+            errorText
+        }
         if (inference == null) {
             Log.w("DevDeck", "LlmInference null, falling back to heuristic. isInitializing=$isInitializing")
-            val result = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
+            val result = HeuristicDiagnosticEngine.diagnose(constrainedTrace, sourceContext, filePath, lineNum, originalLine)
             return@withContext result.copy(
                 expectedSha256 = expectedSha256, 
                 incidentId = incidentId,

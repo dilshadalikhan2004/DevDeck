@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import com.devdeck.app.model.DiagnosticResult
 import com.devdeck.app.model.HistoryItem
 import com.devdeck.app.pipeline.EventPhase
-import com.devdeck.app.pipeline.FileTrustState
 import com.devdeck.app.pipeline.IncidentPipeline
 import com.devdeck.app.pipeline.PipelineEvent
 import com.devdeck.app.pipeline.PipelineOutcome
@@ -53,6 +52,9 @@ data class AppState(
     val showPairDevice: Boolean = false,
     val repairPermissionEnabled: Boolean = true,
     val privacyMode: String = "Local Only",
+    val autonomyPolicy: String = "approve_each",
+    val rerunCommand: String? = null,
+    val rerunSuccess: Boolean = false,
     val pipelines: PipelineRegistry = PipelineRegistry(),
     val selectedIncidentId: String? = null,
     val selectedStage: PipelineStage? = null,
@@ -293,6 +295,20 @@ class MainViewModel : ViewModel() {
 
     fun setPrivacyMode(mode: String) {
         _uiState.update { it.copy(privacyMode = mode) }
+    }
+
+    fun setAutonomyPolicy(policy: String) {
+        _uiState.update { it.copy(autonomyPolicy = policy) }
+    }
+
+    fun onRerunCompleted(command: String?, success: Boolean) {
+        _uiState.update {
+            it.copy(
+                rerunCommand = command,
+                rerunSuccess = success,
+                repairState = RepairState.SUCCESS
+            )
+        }
     }
 
     private val _quickAction = MutableStateFlow<String?>(null)

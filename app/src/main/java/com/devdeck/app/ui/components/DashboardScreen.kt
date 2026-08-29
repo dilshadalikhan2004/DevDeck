@@ -41,15 +41,6 @@ fun DashboardScreen(
     state: AppState,
     onAction: (String) -> Unit
 ) {
-    val logListState = rememberLazyListState()
-
-    // Auto-scroll logs to bottom when new entries arrive
-    LaunchedEffect(state.telemetryLogs.size) {
-        if (state.telemetryLogs.isNotEmpty()) {
-            logListState.animateScrollToItem(state.telemetryLogs.size - 1)
-        }
-    }
-
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()

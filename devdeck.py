@@ -135,11 +135,12 @@ def clean_stderr(stderr: str) -> str:
     return "\n".join(lines)
 
 
-def get_brain(project_root: str | Path) -> ProjectBrain:
+def get_brain(project_root: str | Path) -> tuple[ProjectBrain, bool]:
     path = Path(project_root).resolve()
-    if path not in _project_brains:
+    rebuilt = path not in _project_brains
+    if rebuilt:
         _project_brains[path] = ProjectBrain.build(path)
-    return _project_brains[path]
+    return _project_brains[path], rebuilt
 
 
 def build_incident_payload(command: str, stderr: str, project_root: str | Path | None = None) -> dict:
@@ -153,7 +154,7 @@ def build_incident_payload(command: str, stderr: str, project_root: str | Path |
         expected_sha256 = sha256_file(source_path)
 
     context_budget = int(os.environ.get("DEVDECK_CONTEXT_TOKEN_BUDGET", "650"))
-    brain = get_brain(project.path)
+    brain, indexing_rebuilt = get_brain(project.path)
     evidence = build_evidence_pack(
         index=brain,
         error_text=clean_stderr(stderr),
@@ -184,6 +185,7 @@ def build_incident_payload(command: str, stderr: str, project_root: str | Path |
         "repository_context_tokens": evidence.estimated_tokens,
         "allowed_symbols": sorted(evidence.allowed_symbols),
         "context_receipt": receipt_dict,
+        "indexing_rebuilt": indexing_rebuilt,
     }
 
 
@@ -248,7 +250,14 @@ def run_command_with_watch(command: str) -> int:
                 print(f"    - {item['file']}:{item['line_start']}-{item['line_end']} [{reasons_str}]")
 
         print(f"\n● Dispatched incident to paired clients (Android / Web Console)...")
-        asyncio.run(send_event(payload))
+        events = crash_to_dispatch_events(
+            payload["incident_id"],
+            indexing_rebuilt=payload.get("indexing_rebuilt", False),
+            command=command,
+        )
+        events.append(payload)
+        events.append(make_event(payload["incident_id"], "sent_to_phone", "completed", "Incident handed to paired phone"))
+        asyncio.run(send_events(events))
 
         # Log incident in memory
         memory.log_incident(

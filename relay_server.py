@@ -15,6 +15,7 @@ from bridge_protocol import RepairRequest
 from bridge_security import canonical_project_root, resolve_project_file
 from pairing_state import PairingRegistry
 from sandbox_verifier import SandboxVerifier
+from pipeline_events import humanize_sandbox_failure, make_event
 from repair_memory import RepairMemory
 import sys
 import platform
@@ -151,6 +152,15 @@ async def relay(websocket):
                     expected_sha256 = data.get("expected_sha256")
 
                     print(f"🛠️  [Relay] Verifying candidate patch in Sandbox for Incident {incident_id}...")
+                    intent = data.get("intent", "apply")
+
+                    await broadcast(make_event(
+                        incident_id or "unknown",
+                        "sandbox_dry_run",
+                        "started",
+                        f"Applying candidate in a throwaway copy ({cmd_to_rerun or 'pytest'})",
+                        detail=f"Command: {cmd_to_rerun or 'pytest'}",
+                    ))
 
                     # Step A: Run in Sandbox Verifier with real-time streaming
                     project_root = incident_data.get("project_root", str(Path.cwd())) if incident_data else str(Path.cwd())
@@ -174,7 +184,6 @@ async def relay(websocket):
 
                     await broadcast({"type": "sandbox_done"})
 
-                    # Broadcast Sandbox Proof & Trust Meter
                     await broadcast({
                         "type": "sandbox_verified",
                         "incident_id": incident_id,
@@ -182,16 +191,52 @@ async def relay(websocket):
                         "trust": trust.to_dict(),
                     })
 
-                    # Step B: Check Policy & Apply to main workspace
-                    policy = repair_memory.get_policy()
-                    should_apply = policy.should_auto_apply(trust.total_score, proof.sandbox_passed) or data.get("force_apply", False)
+                    if proof.sandbox_passed:
+                        await broadcast(make_event(
+                            incident_id or "unknown",
+                            "sandbox_dry_run",
+                            "completed",
+                            "Sandbox dry-run passed (exit 0)",
+                            detail=f"Command: {cmd_to_rerun or 'pytest'}\nExit code: 0",
+                            sandbox_passed=True,
+                            sandbox_command=cmd_to_rerun,
+                            sandbox_exit_code=0,
+                            trust_score=trust.total_score,
+                        ))
+                    else:
+                        message, detail = humanize_sandbox_failure(proof.to_dict(), cmd_to_rerun)
+                        await broadcast(make_event(
+                            incident_id or "unknown",
+                            "sandbox_dry_run",
+                            "failed",
+                            message,
+                            detail=detail,
+                            sandbox_passed=False,
+                            sandbox_command=cmd_to_rerun,
+                            sandbox_exit_code=proof.exit_code,
+                            trust_score=trust.total_score,
+                        ))
 
-                    if should_apply or proof.sandbox_passed:
+                    if intent == "dry_run":
+                        if proof.sandbox_passed:
+                            await broadcast(make_event(incident_id or "unknown", "awaiting_review", "started", "Waiting for developer review"))
+                            await broadcast(make_event(incident_id or "unknown", "awaiting_review", "completed", "Ready for Approve / Reject / Request Changes"))
+                        print(f"⏸️ [Relay] Dry-run complete for {incident_id}. Real files untouched.")
+                        continue
+
+                    policy = repair_memory.get_policy()
+                    should_apply = (
+                        data.get("force_apply", False)
+                        or intent == "apply"
+                        or policy.should_auto_apply(trust.total_score, proof.sandbox_passed)
+                    )
+
+                    if should_apply and proof.sandbox_passed:
                         print(f"🚀 [Relay] Applying patch to main workspace ({target_file})...")
+                        await broadcast(make_event(incident_id or "unknown", "applying", "started", "Writing snapshot and patch to real files"))
                         success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, cmd_to_rerun)
 
                         if success:
-                            # Save to learned local repair memory
                             repair_memory.save_verified_repair(
                                 incident_id=incident_id or "unknown",
                                 error_type=incident_data.get("language", "python") if incident_data else "python",
@@ -201,7 +246,6 @@ async def relay(websocket):
                                 diff_text=diff_text,
                                 trust_score=trust.total_score,
                             )
-                            # Update incident audit record
                             if incident_id:
                                 repair_memory.log_incident(
                                     incident_id=incident_id,
@@ -216,6 +260,10 @@ async def relay(websocket):
                                     status="SOLVED",
                                 )
 
+                            await broadcast(make_event(incident_id or "unknown", "applying", "completed", "Patch written to real files"))
+                            await broadcast(make_event(incident_id or "unknown", "verifying", "started", "Re-running the original command"))
+                            await broadcast(make_event(incident_id or "unknown", "verifying", "completed", "Original command exited 0"))
+                            await broadcast(make_event(incident_id or "unknown", "complete", "completed", "Fix kept on disk"))
                             await broadcast({
                                 "type": "log_stream",
                                 "log_line": "✅ [Relay] PATCH APPLIED AND VERIFIED IN MAIN WORKSPACE."
@@ -226,7 +274,15 @@ async def relay(websocket):
                                 "success": True,
                                 "message": "Patch applied and verified.",
                             })
+                            await broadcast({"type": "repair_success", "incident_id": incident_id})
                         else:
+                            await broadcast(make_event(
+                                incident_id or "unknown",
+                                "verifying",
+                                "failed",
+                                "Verification failed: original command did not exit 0",
+                                detail=error_msg,
+                            ))
                             await broadcast({
                                 "type": "log_stream",
                                 "log_line": f"❌ [Relay] MAIN WORKSPACE APPLY FAILED: {error_msg}"
@@ -237,8 +293,9 @@ async def relay(websocket):
                                 "success": False,
                                 "message": error_msg,
                             })
+                            await broadcast({"type": "repair_failed", "incident_id": incident_id, "message": error_msg})
                     else:
-                        print(f"⏸️ [Relay] Patch held for developer review (Trust Score: {trust.total_score}%, Policy: {policy.level.value}).")
+                        print(f"⏸️ [Relay] Patch held (Trust Score: {trust.total_score}%, Policy: {policy.level.value}, intent={intent}).")
                     continue
 
                 # 3. Incident Capture (from devdeck.py)

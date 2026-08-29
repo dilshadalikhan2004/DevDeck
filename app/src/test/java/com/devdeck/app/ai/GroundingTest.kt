@@ -54,4 +54,22 @@ class GroundingTest {
         // Should fall back to heuristic or report ungrounded
         assertNotEquals("secret_func(x)", result.repairCode)
     }
+
+    @Test
+    fun testUnknownFixAbstainsInsteadOfGuessing() {
+        val agent = DiagnosticAgent(null)
+        val result = agent.parseResponse(
+            "<<<WHY>>>Not enough evidence<<<END_WHY>>>\n<<<FIX>>>UNKNOWN<<<END>>>",
+            10.0f,
+            100,
+            "test.py",
+            1,
+            "print(x)",
+            "error",
+            "context",
+            emptySet()
+        )
+        assertTrue(result.abstained)
+        assertTrue(result.rootCause.contains("NEEDS_CONTEXT"))
+    }
 }
