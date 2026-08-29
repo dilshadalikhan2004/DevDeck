@@ -1,10 +1,17 @@
 package com.devdeck.app.ui
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import com.devdeck.app.model.DiagnosticResult
 import com.devdeck.app.model.HistoryItem
-import com.devdeck.app.model.IncidentStatus
+import com.devdeck.app.pipeline.EventPhase
+import com.devdeck.app.pipeline.FileTrustState
+import com.devdeck.app.pipeline.IncidentPipeline
+import com.devdeck.app.pipeline.PipelineEvent
+import com.devdeck.app.pipeline.PipelineOutcome
+import com.devdeck.app.pipeline.PipelineRegistry
+import com.devdeck.app.pipeline.PipelineReducer
+import com.devdeck.app.pipeline.PipelineStage
+import com.devdeck.app.pipeline.RepairCandidate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,6 +25,12 @@ enum class RepairState {
     IDLE, CAPTURING, REVIEWING, SUCCESS
 }
 
+data class CorrectionRequest(
+    val incidentId: String,
+    val note: String,
+    val previous: DiagnosticResult
+)
+
 data class AppState(
     val currentScreen: AppScreen = AppScreen.HOME,
     val repairState: RepairState = RepairState.IDLE,
@@ -29,24 +42,26 @@ data class AppState(
     val isModelReady: Boolean = false,
     val isRelayConnected: Boolean = false,
     val pairedDevice: String = "None",
-    // Live system telemetry
     val cpuPercent: Int = 0,
     val memUsedMB: Long = 0L,
     val memTotalMB: Long = 0L,
     val netKbps: Float = 0f,
-    // Project context
     val activeProject: String = "No project scanned",
-    // Persistent history
     val historyItems: List<HistoryItem> = emptyList(),
-    // Sandbox proof lines streamed during repair
     val sandboxLines: List<String> = emptyList(),
     val sandboxRunning: Boolean = false,
-    // Pair device dialog
     val showPairDevice: Boolean = false,
-    // Settings
     val repairPermissionEnabled: Boolean = true,
-    val privacyMode: String = "Local Only"
-)
+    val privacyMode: String = "Local Only",
+    val pipelines: PipelineRegistry = PipelineRegistry(),
+    val selectedIncidentId: String? = null,
+    val selectedStage: PipelineStage? = null,
+    val pendingReviewCount: Int = 0
+) {
+    val selectedPipeline: IncidentPipeline?
+        get() = selectedIncidentId?.let { pipelines.byId[it] }
+            ?: pipelines.incidents.lastOrNull()
+}
 
 class MainViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(AppState())
@@ -62,12 +77,49 @@ class MainViewModel : ViewModel() {
         }
     }
 
+    fun applyPipelineEvent(event: PipelineEvent) {
+        _uiState.update { state ->
+            val next = state.pipelines.apply(event)
+            val pipeline = next.byId[event.incidentId]
+            val candidate = pipeline?.candidate
+            val derivedRepair = when (pipeline?.outcome) {
+                PipelineOutcome.AWAITING_REVIEW -> RepairState.REVIEWING
+                PipelineOutcome.COMPLETE -> RepairState.SUCCESS
+                PipelineOutcome.IN_PROGRESS -> RepairState.CAPTURING
+                PipelineOutcome.FAILED, PipelineOutcome.ROLLED_BACK, PipelineOutcome.REJECTED -> RepairState.CAPTURING
+                null -> state.repairState
+            }
+            state.copy(
+                pipelines = next,
+                activeIncidentId = event.incidentId,
+                selectedIncidentId = state.selectedIncidentId ?: event.incidentId,
+                pendingReviewCount = next.pendingReviewCount,
+                repairState = derivedRepair,
+                currentResult = candidate?.diagnostic ?: state.currentResult,
+                trustScore = candidate?.trustScore ?: state.trustScore,
+                rootCause = candidate?.reasoning ?: candidate?.diagnostic?.rootCause ?: state.rootCause,
+                sandboxRunning = pipeline?.nodes?.get(PipelineStage.SANDBOX_DRY_RUN)?.status?.name == "ACTIVE"
+            )
+        }
+        addLog("[Pipeline] ${event.stage.wireName} ${event.phase.name.lowercase()}: ${event.message}")
+    }
+
+    fun selectIncident(id: String) {
+        _uiState.update { it.copy(selectedIncidentId = id, activeIncidentId = id) }
+    }
+
+    fun selectStage(stage: PipelineStage?) {
+        _uiState.update { it.copy(selectedStage = stage) }
+    }
+
     fun onIncidentDetected(id: String) {
+        applyPipelineEvent(
+            PipelineEvent(id, PipelineStage.SENT_TO_PHONE, EventPhase.COMPLETED, "Incident received on phone")
+        )
         _uiState.update {
             it.copy(
                 activeIncidentId = id,
-                repairState = RepairState.CAPTURING,
-                currentScreen = AppScreen.REPAIR,
+                selectedIncidentId = id,
                 sandboxLines = emptyList(),
                 sandboxRunning = false
             )
@@ -75,18 +127,45 @@ class MainViewModel : ViewModel() {
     }
 
     fun onAnalysisComplete(result: DiagnosticResult, score: Int, cause: String) {
-        _uiState.update {
-            it.copy(
-                currentResult = result,
-                trustScore = score,
-                rootCause = cause,
-                repairState = RepairState.REVIEWING
+        val incidentId = result.incidentId ?: _uiState.value.activeIncidentId ?: return
+        val candidate = RepairCandidate(
+            incidentId = incidentId,
+            repairFile = result.repairFile,
+            repairLine = result.repairLine,
+            originalLine = result.originalLine,
+            repairCode = result.repairCode,
+            diffText = result.diffText,
+            patchType = result.patchType,
+            reasoning = result.reasoning ?: result.fix,
+            rawModelOutput = result.rawOutput,
+            groundingPassed = !result.abstained,
+            sandboxPassed = false,
+            sandboxCommand = null,
+            sandboxExitCode = null,
+            trustScore = score,
+            expectedSha256 = result.expectedSha256,
+            projectId = result.projectId,
+            confidence = result.confidence,
+            correctionRound = _uiState.value.selectedPipeline?.correctionRounds ?: 0,
+            diagnostic = result
+        )
+        applyPipelineEvent(
+            PipelineEvent(
+                incidentId = incidentId,
+                stage = PipelineStage.DIAGNOSING,
+                phase = EventPhase.CANDIDATE_READY,
+                message = cause,
+                candidate = candidate
             )
+        )
+        _uiState.update {
+            it.copy(currentResult = result, trustScore = score, rootCause = cause)
         }
     }
 
     fun onRepairApplied() {
-        _uiState.update { it.copy(repairState = RepairState.SUCCESS) }
+        val id = _uiState.value.activeIncidentId ?: return
+        applyPipelineEvent(PipelineEvent(id, PipelineStage.APPLYING, EventPhase.STARTED, "Applying to real files"))
     }
 
     private val _repairAction = MutableStateFlow<DiagnosticResult?>(null)
@@ -103,11 +182,59 @@ class MainViewModel : ViewModel() {
         _repairAction.value = null
     }
 
+    fun rejectRepair() {
+        val id = _uiState.value.activeIncidentId ?: return
+        applyPipelineEvent(
+            PipelineEvent(
+                id,
+                PipelineStage.AWAITING_REVIEW,
+                EventPhase.REVIEW_REJECTED,
+                "Developer rejected the candidate. No real files changed."
+            )
+        )
+        _uiState.update {
+            it.copy(currentResult = null, repairState = RepairState.IDLE)
+        }
+    }
+
+    private val _correctionAction = MutableStateFlow<CorrectionRequest?>(null)
+    val correctionAction: StateFlow<CorrectionRequest?> = _correctionAction.asStateFlow()
+
+    fun requestChanges(note: String): Boolean {
+        val state = _uiState.value
+        val pipeline = state.selectedPipeline ?: return false
+        val result = state.currentResult ?: return false
+        if (pipeline.correctionRounds >= PipelineReducer.MAX_CORRECTION_ROUNDS) {
+            applyPipelineEvent(
+                PipelineEvent(
+                    pipeline.incidentId,
+                    PipelineStage.DIAGNOSING,
+                    EventPhase.REQUEST_CHANGES,
+                    "Correction limit reached. Review the candidate manually instead of another AI attempt."
+                )
+            )
+            return false
+        }
+        applyPipelineEvent(
+            PipelineEvent(
+                pipeline.incidentId,
+                PipelineStage.DIAGNOSING,
+                EventPhase.REQUEST_CHANGES,
+                "Developer requested changes: $note"
+            )
+        )
+        _correctionAction.value = CorrectionRequest(pipeline.incidentId, note, result)
+        return true
+    }
+
+    fun clearCorrectionAction() {
+        _correctionAction.value = null
+    }
+
     fun resetRepair() {
         _uiState.update {
             it.copy(
                 repairState = RepairState.IDLE,
-                activeIncidentId = null,
                 currentResult = null,
                 sandboxLines = emptyList(),
                 sandboxRunning = false
@@ -168,7 +295,6 @@ class MainViewModel : ViewModel() {
         _uiState.update { it.copy(privacyMode = mode) }
     }
 
-    // Quick action relay commands (New Shell, Sync DB, Run Tests, Deploy)
     private val _quickAction = MutableStateFlow<String?>(null)
     val quickAction: StateFlow<String?> = _quickAction.asStateFlow()
 

@@ -91,7 +91,8 @@ class DiagnosticAgent(private val context: Context?) {
         incidentId: String? = null,
         projectId: String? = null,
         repositoryContext: String? = null,
-        repositorySymbols: Set<String> = emptySet()
+        repositorySymbols: Set<String> = emptySet(),
+        developerConstraint: String? = null
     ): Pair<DiagnosticResult, Long> = withContext(Dispatchers.IO) {
         // Wait up to 30 seconds if initialization is in progress
         var waitCount = 0
@@ -136,7 +137,7 @@ class DiagnosticAgent(private val context: Context?) {
             3. Do not invent names. Use only target identifiers [$originalIds] or repository symbols: [${repositorySymbols.joinToString(", ")}].
             3a. If evidence is insufficient, output <<<FIX>>>UNKNOWN<<<END>>>.
             4. Include 1-2 lines of surrounding unchanged context in diffs starting with spaces. Deleted lines start with '-' and added lines start with '+'.
-            5. No explanation or commentary.
+            5. Output a one-line explanation of the bug and the fix between <<<WHY>>> and <<<END_WHY>>>.
 
             FEW-SHOT EXAMPLES:
             Example 1 (Single Line):
@@ -181,6 +182,7 @@ class DiagnosticAgent(private val context: Context?) {
             $safeRepoContext
             Target Code Context:
             $originalLine
+            ${if (!developerConstraint.isNullOrBlank()) "DEVELOPER CORRECTION (must honor):\n$developerConstraint\n" else ""}
             <end_of_turn>
             <start_of_turn>model
             """.trimIndent()
@@ -274,6 +276,9 @@ class DiagnosticAgent(private val context: Context?) {
         repositorySymbols: Set<String> = emptySet()
     ): DiagnosticResult {
         return try {
+            val whyRegex = "<<<WHY>>>([\\s\\S]*?)(?:<<<END_WHY>>>|$)".toRegex()
+            val reasoning = whyRegex.find(raw)?.groupValues?.get(1)?.trim()?.lineSequence()?.firstOrNull { it.isNotBlank() }
+
             // Try diff format first
             val diffRegex = "<<<DIFF>>>([\\s\\S]*?)(?:<<<END>>>|<end_of_turn>|$)".toRegex()
             val diffMatch = diffRegex.find(raw)
@@ -309,7 +314,7 @@ class DiagnosticAgent(private val context: Context?) {
                     Log.d("DevDeck", "Diff grounding passed. Changed lines: $changedLineCount")
 
                     return DiagnosticResult(
-                        rootCause = "Multi-line diff repair suggested by on-device AI.",
+                        rootCause = reasoning ?: "Multi-line diff repair suggested by on-device AI.",
                         location = filePath ?: "Unclear",
                         fix = "Applied unified diff patch",
                         tokensPerSecond = tps,
@@ -320,7 +325,8 @@ class DiagnosticAgent(private val context: Context?) {
                         originalLine = originalLine,
                         patchType = PatchType.DIFF,
                         diffText = diffText,
-                        rawOutput = raw
+                        rawOutput = raw,
+                        reasoning = reasoning
                     )
                 }
             }
@@ -329,6 +335,23 @@ class DiagnosticAgent(private val context: Context?) {
             val fixRegex = "<<<FIX>>>([\\s\\S]*?)(?:<<<END>>>|<end_of_turn>|$)".toRegex()
             val match = fixRegex.find(raw)
             var extractedFix = match?.groupValues?.get(1)?.trim()
+
+            if (extractedFix != null && extractedFix.uppercase() == "UNKNOWN") {
+                return DiagnosticResult(
+                    rootCause = "NEEDS_CONTEXT: not enough evidence for a safe fix.",
+                    location = filePath ?: "Unclear",
+                    fix = "No safe fix proposed",
+                    isParsed = false,
+                    tokensPerSecond = tps,
+                    memoryUsageMB = mem,
+                    repairFile = filePath,
+                    repairLine = lineNum,
+                    originalLine = originalLine,
+                    rawOutput = raw,
+                    reasoning = reasoning ?: "The model abstained rather than guessing.",
+                    abstained = true
+                )
+            }
 
             // Clean any accidental markdown code fencing
             extractedFix = extractedFix
@@ -354,7 +377,7 @@ class DiagnosticAgent(private val context: Context?) {
 
             if (isConfident) {
                 DiagnosticResult(
-                    rootCause = "One-line fix suggested by on-device AI.",
+                    rootCause = reasoning ?: "One-line fix suggested by on-device AI.",
                     location = filePath ?: "Unclear",
                     fix = extractedFix!!,
                     tokensPerSecond = tps,
@@ -364,7 +387,8 @@ class DiagnosticAgent(private val context: Context?) {
                     repairCode = extractedFix,
                     originalLine = originalLine,
                     patchType = PatchType.SINGLE_LINE,
-                    rawOutput = raw
+                    rawOutput = raw,
+                    reasoning = reasoning
                 )
             } else {
                 // If AI was ungrounded or empty, invoke deterministic high-accuracy heuristic engine
@@ -398,7 +422,8 @@ class DiagnosticAgent(private val context: Context?) {
             repairCode = heuristicResult.repairCode,
             originalLine = originalLine,
             patchType = PatchType.SINGLE_LINE,
-            rawOutput = ""
+            rawOutput = "",
+            reasoning = heuristicResult.fix
         )
     }
 }
@@ -547,7 +572,8 @@ internal object HeuristicDiagnosticEngine {
             repairCode = repairCode,
             originalLine = origLine,
             tokensPerSecond = 0f,
-            memoryUsageMB = 0
+            memoryUsageMB = 0,
+            reasoning = fix
         )
     }
 }

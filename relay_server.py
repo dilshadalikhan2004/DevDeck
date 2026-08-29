@@ -152,8 +152,13 @@ async def relay(websocket):
 
                     print(f"🛠️  [Relay] Verifying candidate patch in Sandbox for Incident {incident_id}...")
 
-                    # Step A: Run in Sandbox Verifier
+                    # Step A: Run in Sandbox Verifier with real-time streaming
                     project_root = incident_data.get("project_root", str(Path.cwd())) if incident_data else str(Path.cwd())
+                    
+                    def on_sandbox_line(line: str):
+                        print(f"  [Sandbox] {line}")
+                        asyncio.create_task(broadcast({"type": "sandbox_line", "line": line}))
+
                     proof, trust = SandboxVerifier.verify_patch(
                         project_root=project_root,
                         command=cmd_to_rerun or "pytest",
@@ -164,7 +169,10 @@ async def relay(websocket):
                         diff_text=diff_text,
                         allowed_symbols=allowed_symbols,
                         expected_sha256=expected_sha256,
+                        progress_callback=on_sandbox_line,
                     )
+
+                    await broadcast({"type": "sandbox_done"})
 
                     # Broadcast Sandbox Proof & Trust Meter
                     await broadcast({

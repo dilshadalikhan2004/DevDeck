@@ -22,5 +22,7 @@ data class DiagnosticResult(
     val expectedSha256: String? = null,
     val incidentId: String? = null,
     val projectId: String? = null,
-    val confidence: Float = 1.0f
+    val confidence: Float = 1.0f,
+    val reasoning: String? = null,
+    val abstained: Boolean = false
 )

@@ -12,7 +12,8 @@ enum class IncidentStatus {
     DIAGNOSED,
     REPAIR_SENT,
     SOLVED,
-    FAILED
+    FAILED,
+    SUPERSEDED
 }
 
 data class HistoryItem(
@@ -162,6 +163,7 @@ class DiagnosticHistory(private val context: Context) {
                     IncidentStatus.SOLVED -> "✅ [SOLVED]"
                     IncidentStatus.REPAIR_SENT -> "🚀 [PATCH SENT]"
                     IncidentStatus.FAILED -> "❌ [FAILED]"
+                    IncidentStatus.SUPERSEDED -> "↺ [SUPERSEDED]"
                     IncidentStatus.DIAGNOSED -> "🔍 [DIAGNOSED]"
                     IncidentStatus.DETECTED -> "⚠️ [DETECTED]"
                 }

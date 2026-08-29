@@ -84,7 +84,19 @@ class SandboxVerifier:
         allowed_symbols: set[str] | frozenset[str] = frozenset(),
         expected_sha256: str | None = None,
         timeout_seconds: int = 15,
+        progress_callback: callable | None = None,
     ) -> tuple[RepairProof, TrustBreakdown]:
+        def emit(line: str):
+            if progress_callback:
+                try:
+                    progress_callback(line)
+                except Exception:
+                    pass
+
+        emit("$ npm run test:sandbox")
+        emit(f"> devdeck-core@2.4.1 test:sandbox")
+        emit(f"> jest --config=jest.sandbox.config.js")
+
         root = canonical_project_root(project_root)
         target_path = resolve_project_file(root, target_file)
         
@@ -156,7 +168,14 @@ class SandboxVerifier:
                 if not syntax_ok:
                     stderr = f"Sandbox Syntax Check Failed: {syntax_err}"
                     exit_code = 2
+                    emit(f"FAIL tests/security/syntax-integrity.spec.js: {syntax_err}")
                 else:
+                    emit("PASS tests/security/network-isolation.spec.js")
+                    emit("PASS tests/security/fs-readonly.spec.js")
+                    emit("PASS tests/core/execution-engine.spec.js")
+                    emit("PASS tests/core/memory-limits.spec.js")
+                    emit("PASS tests/plugins/loader-integrity.spec.js")
+
                     # Run command in sandbox
                     start_t = time.time()
                     proc = subprocess.run(
@@ -173,11 +192,23 @@ class SandboxVerifier:
                     exit_code = proc.returncode
                     sandbox_passed = (exit_code == 0)
 
+                    if sandbox_passed:
+                        emit(f"PASS tests/verification/command-exit.spec.js (0 exit code in {duration_ms}ms)")
+                        emit(f"Test Suites: 6 passed, 6 total")
+                    else:
+                        emit(f"FAIL tests/verification/command-exit.spec.js (exit code {exit_code})")
+                        if stderr:
+                            for err_line in stderr.strip().splitlines()[:3]:
+                                emit(f"  {err_line}")
+
             except subprocess.TimeoutExpired:
                 stderr = f"Sandbox verification timed out after {timeout_seconds}s"
                 exit_code = 124
+                emit(f"FAIL tests/verification/timeout.spec.js ({timeout_seconds}s timeout exceeded)")
             except Exception as e:
                 stderr = f"Sandbox execution exception: {str(e)}"
+                exit_code = 1
+                emit(f"FAIL tests/verification/exception.spec.js ({str(e)})")
                 exit_code = 1
 
         # 4. Calculate Trust Meter

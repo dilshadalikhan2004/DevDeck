@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 from bridge_security import canonical_project_root, sha256_file
+from pipeline_events import crash_to_dispatch_events, make_event
 from repo_context import ProjectBrain, build_evidence_pack
 from sandbox_verifier import SandboxVerifier
 from repair_memory import RepairMemory, AutonomyPolicy, AutonomyLevel
@@ -35,8 +36,17 @@ async def send_event(payload: dict):
     try:
         async with websockets.connect(uri) as websocket:
             await websocket.send(json.dumps(payload))
-    except Exception as e:
-        # Fail silently if relay server is not running in background
+    except Exception:
+        pass
+
+
+async def send_events(payloads: list[dict]):
+    uri = os.environ.get("DEVDECK_RELAY_URI", "ws://localhost:8765")
+    try:
+        async with websockets.connect(uri) as websocket:
+            for payload in payloads:
+                await websocket.send(json.dumps(payload))
+    except Exception:
         pass
 
 

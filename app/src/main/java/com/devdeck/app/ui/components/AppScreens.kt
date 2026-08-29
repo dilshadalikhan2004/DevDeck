@@ -268,6 +268,7 @@ fun HistoryCard(item: HistoryItem) {
         IncidentStatus.SOLVED -> Triple("• FIXED", Color(0xFF006e28), Color(0xFFE8F5E9))
         IncidentStatus.REPAIR_SENT -> Triple("• PATCH SENT", Color(0xFF0059b5), Color(0xFFE3F2FD))
         IncidentStatus.FAILED -> Triple("• ROLLED BACK", Color(0xFFBA1A1A), Color(0xFFFCE8E6))
+        IncidentStatus.SUPERSEDED -> Triple("• SUPERSEDED", Color(0xFFBF6A02), Color(0xFFFFF3E0))
         IncidentStatus.DIAGNOSED -> Triple("• DIAGNOSED", Color(0xFF616161), Color(0xFFEEEEEE))
         IncidentStatus.DETECTED -> Triple("• DETECTED", Color(0xFFE65100), Color(0xFFFFF3E0))
     }

@@ -64,11 +64,45 @@ fun DashboardScreen(
     ) {
         item { StatusHeaderColumn(state = state) }
         item {
-            TelemetryCard(
-                modifier = Modifier.fillMaxWidth().height(280.dp),
-                state = state,
-                logListState = logListState
-            )
+            GlassCard(modifier = Modifier.fillMaxWidth().heightIn(min = 280.dp), cornerRadius = 16.dp, contentPadding = 16.dp) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "LIVE PIPELINE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 9.sp,
+                            letterSpacing = 1.5.sp
+                        )
+                        Icon(Icons.Default.Timeline, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                    }
+                    val memStr = if (state.memTotalMB > 0)
+                        "${state.memUsedMB / 1024}GB/${state.memTotalMB / 1024}GB"
+                    else "—"
+                    val netStr = if (state.netKbps > 0) "%.1fMB/s".format(state.netKbps / 1024f) else "—"
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TelemetryMetric(label = "CPU", value = if (state.cpuPercent > 0) "${state.cpuPercent}%" else "—")
+                        TelemetryMetric(label = "MEM", value = memStr)
+                        TelemetryMetric(label = "NET", value = netStr)
+                    }
+                    HorizontalDivider(color = LuminaDesign.HairlineStroke, thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LivePipelineList(
+                        incidents = state.pipelines.incidents,
+                        selectedIncidentId = state.selectedIncidentId,
+                        selectedStage = null,
+                        onSelectIncident = { onAction("repair") },
+                        onSelectStage = { onAction("repair") }
+                    )
+                }
+            }
         }
         item { RecentActionCard(modifier = Modifier.fillMaxWidth(), state = state, onViewLog = { onAction("history") }) }
         item { QuickActionGrid(onAction = onAction) }
@@ -334,6 +368,7 @@ fun RecentActionCard(
                     IncidentStatus.SOLVED -> "Task Completed"
                     IncidentStatus.REPAIR_SENT -> "Repair Sent"
                     IncidentStatus.FAILED -> "Repair Failed"
+                    IncidentStatus.SUPERSEDED -> "Superseded"
                     IncidentStatus.DIAGNOSED -> "Diagnosed"
                     IncidentStatus.DETECTED -> "Detected"
                 }

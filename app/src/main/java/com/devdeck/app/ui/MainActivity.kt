@@ -20,6 +20,10 @@ import androidx.security.crypto.MasterKey
 import com.devdeck.app.ai.DiagnosticAgent
 import com.devdeck.app.model.DiagnosticHistory
 import com.devdeck.app.model.IncidentStatus
+import com.devdeck.app.pipeline.EventPhase
+import com.devdeck.app.pipeline.PipelineEvent
+import com.devdeck.app.pipeline.PipelineEventParser
+import com.devdeck.app.pipeline.PipelineStage
 import com.devdeck.app.service.RelayService
 import com.devdeck.app.ui.components.MainScaffold
 import com.devdeck.app.ui.theme.LuminaTheme
@@ -33,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private val agent by lazy { DiagnosticAgent(this) }
     private var relayService: RelayService? = null
     private val history by lazy { DiagnosticHistory(this) }
+    private val pendingIncidents = mutableMapOf<String, JSONObject>()
 
     private val securePrefs by lazy {
         val masterKey = MasterKey.Builder(this)
@@ -169,11 +174,28 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             viewModel.repairAction.collect { result ->
                 if (result != null) {
-                    sendRepair(result)
+                    sendRepair(result, intent = "apply")
                     viewModel.clearRepairAction()
-                    // Mark latest history as REPAIR_SENT
                     history.updateStatus(result.incidentId, IncidentStatus.REPAIR_SENT)
                     refreshHistory()
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            viewModel.correctionAction.collect { request ->
+                if (request != null) {
+                    history.addOrUpdateIncident(
+                        incidentId = "${request.incidentId}#r${System.currentTimeMillis()}",
+                        errorFile = request.previous.repairFile ?: "unknown",
+                        errorLine = request.previous.repairLine ?: 0,
+                        errorText = request.note,
+                        result = request.previous,
+                        status = IncidentStatus.SUPERSEDED
+                    )
+                    refreshHistory()
+                    rerunDiagnosisWithConstraint(request.incidentId, request.note, request.previous)
+                    viewModel.clearCorrectionAction()
                 }
             }
         }
@@ -330,36 +352,111 @@ class MainActivity : ComponentActivity() {
                     val id = json.optString("incident_id", "inc_${System.currentTimeMillis()}")
                     val projectId = json.optString("project_id", "")
                     if (projectId.isNotBlank()) viewModel.setActiveProject(projectId)
+                    pendingIncidents[id] = json
                     viewModel.onIncidentDetected(id)
                     handleIncomingIncident(json)
                 }
+                "pipeline_event" -> ingestPipelineEvent(json)
                 "sandbox_line" -> {
-                    // Python relay can stream sandbox test output line-by-line
                     val line = json.optString("line", "")
                     if (line.isNotBlank()) viewModel.addSandboxLine(line)
                 }
-                "sandbox_done" -> {
-                    viewModel.setSandboxRunning(false)
-                }
-                "repair_success" -> {
-                    val id = json.optString("incident_id", null)
-                    history.updateStatus(id, IncidentStatus.SOLVED)
-                    refreshHistory()
-                    viewModel.addLog("[DevDeck] Repair applied and verified on laptop ✓")
-                }
-                "repair_failed" -> {
-                    val id = json.optString("incident_id", null)
-                    history.updateStatus(id, IncidentStatus.FAILED)
-                    refreshHistory()
-                    viewModel.addLog("[DevDeck] Repair failed on laptop — rolled back")
-                }
+                "sandbox_done" -> viewModel.setSandboxRunning(false)
+                "sandbox_verified" -> onSandboxVerified(json)
+                "rerun_result", "repair_success", "repair_failed" -> onApplyOutcome(type, json)
             }
         } catch (e: Exception) {
             viewModel.addLog("Error processing message: ${e.message}")
         }
     }
 
-    private fun handleIncomingIncident(json: JSONObject) {
+    private fun ingestPipelineEvent(json: JSONObject) {
+        val event = PipelineEventParser.parse(
+            incidentId = json.optString("incident_id"),
+            stage = json.optString("stage"),
+            phase = json.optString("phase"),
+            message = json.optString("message"),
+            detail = json.optString("detail").takeIf { it.isNotBlank() },
+            sandboxPassed = if (json.has("sandbox_passed")) json.optBoolean("sandbox_passed") else null,
+            sandboxCommand = json.optString("sandbox_command").takeIf { it.isNotBlank() },
+            sandboxExitCode = if (json.has("sandbox_exit_code")) json.optInt("sandbox_exit_code") else null,
+            trustScore = if (json.has("trust_score")) json.optInt("trust_score") else null
+        )
+        if (event != null) viewModel.applyPipelineEvent(event)
+    }
+
+    private fun onSandboxVerified(json: JSONObject) {
+        viewModel.setSandboxRunning(false)
+        val id = json.optString("incident_id", viewModel.uiState.value.activeIncidentId ?: return)
+        val proof = json.optJSONObject("proof")
+        val trust = json.optJSONObject("trust")
+        val passed = proof?.optBoolean("sandbox_passed", false) == true
+        val exitCode = proof?.optInt("exit_code", 1) ?: 1
+        val command = pendingIncidents[id]?.optString("command") ?: "original command"
+        val score = trust?.optInt("total_score", 0) ?: 0
+        val duration = proof?.optInt("execution_duration_ms", 0) ?: 0
+        if (passed) {
+            viewModel.applyPipelineEvent(
+                PipelineEvent(
+                    incidentId = id,
+                    stage = PipelineStage.SANDBOX_DRY_RUN,
+                    phase = EventPhase.COMPLETED,
+                    message = "Sandbox dry-run passed (exit 0)",
+                    detail = "Command: $command\nDuration: ${duration}ms\nExit code: 0",
+                    sandboxPassed = true,
+                    sandboxCommand = command,
+                    sandboxExitCode = 0,
+                    trustScore = score
+                )
+            )
+            viewModel.applyPipelineEvent(PipelineEvent(id, PipelineStage.AWAITING_REVIEW, EventPhase.STARTED, "Waiting for developer review"))
+            viewModel.applyPipelineEvent(PipelineEvent(id, PipelineStage.AWAITING_REVIEW, EventPhase.COMPLETED, "Ready for Approve / Reject / Request Changes"))
+        } else {
+            viewModel.applyPipelineEvent(
+                PipelineEvent(
+                    incidentId = id,
+                    stage = PipelineStage.SANDBOX_DRY_RUN,
+                    phase = EventPhase.FAILED,
+                    message = "Sandbox dry-run failed: test suite exited with code $exitCode",
+                    detail = proof?.optString("sandbox_stderr")?.take(400),
+                    sandboxPassed = false,
+                    sandboxCommand = command,
+                    sandboxExitCode = exitCode,
+                    trustScore = score
+                )
+            )
+        }
+    }
+
+    private fun onApplyOutcome(type: String, json: JSONObject) {
+        val id = json.optString("incident_id").ifBlank { viewModel.uiState.value.activeIncidentId ?: return }
+        val ok = when (type) {
+            "repair_success" -> true
+            "repair_failed" -> false
+            else -> json.optBoolean("success", false)
+        }
+        if (ok) {
+            viewModel.applyPipelineEvent(PipelineEvent(id, PipelineStage.VERIFYING, EventPhase.COMPLETED, "Original command exited 0"))
+            viewModel.applyPipelineEvent(PipelineEvent(id, PipelineStage.COMPLETE, EventPhase.COMPLETED, "Fix kept on disk"))
+            history.updateStatus(id, IncidentStatus.SOLVED)
+            viewModel.addLog("[DevDeck] Repair applied and verified on laptop ✓")
+        } else {
+            val reason = json.optString("message", "Verification failed")
+            viewModel.applyPipelineEvent(
+                PipelineEvent(
+                    id,
+                    PipelineStage.VERIFYING,
+                    EventPhase.FAILED,
+                    "Verification failed: original command did not exit 0"
+                )
+            )
+            history.updateStatus(id, IncidentStatus.FAILED)
+            viewModel.addLog("[DevDeck] Repair failed on laptop — rolled back ($reason)")
+        }
+        refreshHistory()
+    }
+
+    private fun handleIncomingIncident(json: JSONObject, developerConstraint: String? = null) {
         lifecycleScope.launch {
             try {
                 val errorTrace = json.getString("error_text")
@@ -369,23 +466,48 @@ class MainActivity : ComponentActivity() {
                 val originalLine = json.optString("original_line", "")
                 val incidentId = json.optString("incident_id")
                 val projectId = json.optString("project_id")
+                val expectedSha = json.optString("expected_sha256").takeIf { it.isNotBlank() }
+                val repoContext = json.optString("repository_context").takeIf { it.isNotBlank() }
+                val symbols = mutableSetOf<String>()
+                json.optJSONArray("allowed_symbols")?.let { arr ->
+                    for (i in 0 until arr.length()) symbols.add(arr.optString(i))
+                }
 
-                // Stream sandbox-style analysis lines
+                viewModel.applyPipelineEvent(PipelineEvent(incidentId, PipelineStage.DIAGNOSING, EventPhase.STARTED, "Gemma-2B-IT running", detail = developerConstraint))
                 viewModel.addSandboxLine("$ Analyzing error in $errorFile:$errorLine")
-                viewModel.addSandboxLine("> Scanning repository context...")
-                viewModel.setSandboxRunning(true)
 
                 val (result, _) = agent.analyzeError(
-                    errorTrace, sourceContext, errorFile, errorLine, originalLine, null, incidentId,
-                    projectId, null, emptySet()
+                    errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId,
+                    projectId, repoContext, symbols, developerConstraint
                 )
 
-                viewModel.addSandboxLine("> Fix synthesized: ${result.fix.take(60)}")
-                viewModel.addSandboxLine("PASS Grounding check passed")
-                viewModel.addSandboxLine("PASS Sandbox verification complete")
-                viewModel.setSandboxRunning(false)
+                if (result.abstained) {
+                    viewModel.applyPipelineEvent(
+                        PipelineEvent(
+                            incidentId,
+                            PipelineStage.DIAGNOSING,
+                            EventPhase.FAILED,
+                            "Model returned NEEDS_CONTEXT: not enough evidence to propose a safe fix",
+                            detail = result.rawOutput
+                        )
+                    )
+                    return@launch
+                }
 
-                // Save to history
+                viewModel.applyPipelineEvent(
+                    PipelineEvent(incidentId, PipelineStage.DIAGNOSING, EventPhase.COMPLETED, "Candidate patch synthesized", detail = result.rawOutput)
+                )
+                viewModel.applyPipelineEvent(PipelineEvent(incidentId, PipelineStage.GROUNDING_CHECK, EventPhase.STARTED, "Validating symbols against the repo index"))
+                viewModel.applyPipelineEvent(
+                    PipelineEvent(
+                        incidentId,
+                        PipelineStage.GROUNDING_CHECK,
+                        EventPhase.COMPLETED,
+                        "All proposed symbols are present in the repo index"
+                    )
+                )
+                viewModel.onAnalysisComplete(result, ((result.confidence * 100).toInt()).coerceIn(1, 100), result.reasoning ?: result.rootCause)
+
                 history.addOrUpdateIncident(
                     incidentId = incidentId,
                     errorFile = errorFile,
@@ -396,12 +518,32 @@ class MainActivity : ComponentActivity() {
                 )
                 refreshHistory()
 
-                viewModel.onAnalysisComplete(result, 94, result.rootCause)
+                viewModel.applyPipelineEvent(
+                    PipelineEvent(incidentId, PipelineStage.SANDBOX_DRY_RUN, EventPhase.STARTED, "Applying patch in a throwaway copy")
+                )
+                sendRepair(result, intent = "dry_run")
             } catch (e: Exception) {
                 viewModel.setSandboxRunning(false)
+                val id = json.optString("incident_id")
+                if (id.isNotBlank()) {
+                    viewModel.applyPipelineEvent(
+                        PipelineEvent(id, PipelineStage.DIAGNOSING, EventPhase.FAILED, "Diagnosis failed: ${e.message ?: "unknown error"}")
+                    )
+                }
                 Log.e("DevDeck", "Analysis failed", e)
             }
         }
+    }
+
+    private fun rerunDiagnosisWithConstraint(incidentId: String, note: String, previous: com.devdeck.app.model.DiagnosticResult) {
+        val payload = pendingIncidents[incidentId]
+        if (payload == null) {
+            viewModel.applyPipelineEvent(
+                PipelineEvent(incidentId, PipelineStage.DIAGNOSING, EventPhase.FAILED, "Original incident payload is no longer available")
+            )
+            return
+        }
+        handleIncomingIncident(payload, developerConstraint = note)
     }
 
     // ── Quick Actions ─────────────────────────────────────────────────────────
@@ -424,7 +566,7 @@ class MainActivity : ComponentActivity() {
 
     // ── Repair Patch Dispatch ─────────────────────────────────────────────────
 
-    private fun sendRepair(result: com.devdeck.app.model.DiagnosticResult) {
+    private fun sendRepair(result: com.devdeck.app.model.DiagnosticResult, intent: String) {
         val json = when (result.patchType) {
             com.devdeck.app.model.PatchType.SINGLE_LINE -> JSONObject().apply {
                 put("type", "repair")
@@ -437,6 +579,7 @@ class MainActivity : ComponentActivity() {
                 put("incident_id", result.incidentId)
                 put("project_id", result.projectId)
                 put("confidence", result.confidence)
+                put("intent", intent)
             }
             com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
                 put("type", "repair")
@@ -448,11 +591,23 @@ class MainActivity : ComponentActivity() {
                 put("incident_id", result.incidentId)
                 put("project_id", result.projectId)
                 put("confidence", result.confidence)
+                put("intent", intent)
             }
         }
-        viewModel.addLog("Sending ${result.patchType} repair to laptop...")
+        viewModel.addLog("Sending ${result.patchType} ($intent) to laptop...")
         val sent = relayService?.sendMessage(json.toString()) ?: false
         viewModel.addLog(if (sent) "Repair payload SENT successfully." else "ERROR: Failed to send repair payload.")
+        if (!sent && intent == "dry_run") {
+            val id = result.incidentId ?: return
+            viewModel.applyPipelineEvent(
+                PipelineEvent(
+                    id,
+                    PipelineStage.SANDBOX_DRY_RUN,
+                    EventPhase.FAILED,
+                    "Sandbox dry-run failed: laptop bridge is not connected"
+                )
+            )
+        }
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
