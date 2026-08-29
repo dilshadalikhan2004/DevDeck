@@ -220,10 +220,10 @@ async def relay(websocket):
                         ))
 
                     if intent == "dry_run":
-                        if proof.sandbox_passed:
-                            await broadcast(make_event(incident_id or "unknown", "awaiting_review", "started", "Waiting for developer review"))
-                            await broadcast(make_event(incident_id or "unknown", "awaiting_review", "completed", "Ready for Approve / Reject / Request Changes"))
-                        print(f"⏸️ [Relay] Dry-run complete for {incident_id}. Real files untouched.")
+                        review_msg = "Ready for Approve / Reject / Request Changes" if proof.sandbox_passed else f"Sandbox test failed (Exit {proof.exit_code}) — Review diff"
+                        await broadcast(make_event(incident_id or "unknown", "awaiting_review", "started", "Waiting for developer review"))
+                        await broadcast(make_event(incident_id or "unknown", "awaiting_review", "completed", review_msg))
+                        print(f"⏸️ [Relay] Dry-run complete for {incident_id}. Ready for developer review.")
                         continue
 
                     policy = repair_memory.get_policy()

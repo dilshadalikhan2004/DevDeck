@@ -102,6 +102,18 @@ def get_error_metadata(stderr: str):
         if found_file and os.path.exists(found_file):
             break
 
+    # Fallback: check for module path in ImportError / ModuleNotFoundError
+    if not found_file or not os.path.exists(found_file):
+        import_match = re.search(r"from ['\"]?([a-zA-Z0-9_\.]+)['\"]?", stderr) or re.search(r"module ['\"]?([a-zA-Z0-9_\.]+)['\"]?", stderr)
+        if import_match:
+            mod_path = import_match.group(1).replace(".", "/") + ".py"
+            for prefix in ["", "src/", "lib/"]:
+                candidate = prefix + mod_path
+                if os.path.exists(candidate):
+                    found_file = candidate
+                    found_line = 1
+                    break
+
     context = None
     original_line = None
     if found_file and os.path.exists(found_file):

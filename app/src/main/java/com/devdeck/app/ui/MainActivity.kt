@@ -425,6 +425,8 @@ class MainActivity : ComponentActivity() {
                     trustScore = score
                 )
             )
+            viewModel.applyPipelineEvent(PipelineEvent(id, PipelineStage.AWAITING_REVIEW, EventPhase.STARTED, "Waiting for developer review"))
+            viewModel.applyPipelineEvent(PipelineEvent(id, PipelineStage.AWAITING_REVIEW, EventPhase.COMPLETED, "Review candidate (Sandbox tests failed)"))
         }
     }
 
