@@ -19,6 +19,8 @@ from pipeline_events import humanize_sandbox_failure, make_event
 from repair_memory import RepairMemory
 import sys
 import platform
+import http.server
+import threading
 
 if sys.platform == "win32":
     try:
@@ -323,9 +325,126 @@ async def relay(websocket):
         print(f"[Relay] Disconnected: {addr}. Remaining clients: {len(connected_clients)}")
 
 
+main_loop: asyncio.AbstractEventLoop | None = None
+
+
+async def process_hook_incident(data: dict):
+    cmd = data.get("command", "")
+    exit_code = data.get("exit_code", 1)
+    cwd_str = data.get("cwd", str(Path.cwd()))
+    error_text = data.get("error_text", "")
+    source = data.get("source", "shell_hook")
+
+    print(f"\n⚡ [Terminal Intercept] Captured failure from {source}: {cmd} (Exit: {exit_code})")
+
+    # Import devdeck builder
+    try:
+        from devdeck import build_incident_payload, crash_to_dispatch_events
+        if not error_text or len(error_text.strip()) < 5:
+            error_text = f"Command failed: {cmd}\nExit Code: {exit_code}\nWorking Directory: {cwd_str}"
+        payload = build_incident_payload(cmd, error_text, Path(cwd_str))
+    except Exception as e:
+        incident_id = f"inc_{int(datetime.now().timestamp())}"
+        payload = {
+            "type": "incident",
+            "incident_id": incident_id,
+            "command": cmd,
+            "error_text": error_text or f"Command failed: {cmd} (Exit: {exit_code})",
+            "error_file": "unknown",
+            "error_line": 1,
+            "project_id": "auto_project",
+            "project_root": cwd_str,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    incident_id = payload.get("incident_id", f"inc_{int(datetime.now().timestamp())}")
+    incidents[incident_id] = payload
+    incident_history.append(payload)
+
+    # Generate pipeline events
+    try:
+        from devdeck import crash_to_dispatch_events
+        events = crash_to_dispatch_events(incident_id, False, cmd)
+    except Exception:
+        events = [
+            make_event(incident_id, "crash_detected", "completed", f"{cmd} failed with exit {exit_code}", detail=error_text),
+            make_event(incident_id, "indexing", "skipped", "Index ready"),
+        ]
+
+    events.append(payload)
+    events.append(make_event(incident_id, "sent_to_phone", "completed", "Incident handed to paired phone"))
+
+    # Broadcast to phone and all clients
+    for ev in events:
+        await broadcast(ev)
+
+    print(f"📱 [Relay] Dispatched incident {incident_id} to {len(connected_clients)} connected client(s).")
+
+
+class HookHTTPHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass  # quiet logs
+
+    def do_GET(self):
+        if self.path in ("/health", "/status", "/health/", "/status/"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            resp = json.dumps({
+                "status": "online",
+                "paired_clients": len(connected_clients),
+                "host": socket.gethostname(),
+                "os": platform.system()
+            })
+            self.wfile.write(resp.encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path in ("/incident", "/incident/"):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8", errors="replace")
+            try:
+                data = json.loads(body) if body else {}
+                if main_loop and main_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(process_hook_incident(data), main_loop)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b'{"status":"accepted","dispatched":true}')
+            except Exception as e:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def start_http_server(host: str = "0.0.0.0", http_port: int = 8766):
+    try:
+        server = http.server.ThreadingHTTPServer((host, http_port), HookHTTPHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server
+    except Exception as e:
+        print(f"[Relay HTTP Warning] Could not bind HTTP port {http_port}: {e}")
+        return None
+
+
 async def main():
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+
     host = "0.0.0.0"
     port = 8765
+    http_port = 8766
+
+    # Start HTTP Hook Listener
+    start_http_server(host, http_port)
 
     # Print local IPs
     hostname = socket.gethostname()
@@ -353,7 +472,8 @@ async def main():
     print("=" * 65)
     print("🚀 DevDeck Transparent Repair Runtime Bridge")
     print(f"• Host Device: {device_label}")
-    print(f"• Listening on: ws://localhost:{port} / ws://0.0.0.0:{port}")
+    print(f"• WebSocket Bridge: ws://localhost:{port} / ws://0.0.0.0:{port}")
+    print(f"• Terminal Hook HTTP: http://127.0.0.1:{http_port}/incident")
     print(f"• Local Network IP: {primary_ip}")
     print(f"• Autonomy Policy: {repair_memory.get_policy().level.value}")
     print(f"• Pairing Secret: {PAIRING_SECRET}")
@@ -389,3 +509,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n[Relay] Server shut down.")
+

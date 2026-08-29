@@ -330,12 +330,150 @@ def set_or_get_policy(arg: str | None = None) -> None:
         print(f"✅ [DevDeck Autonomy Policy] Updated to: {new_pol.level.value}")
 
 
+def install_shell_hook() -> None:
+    hook_dir = Path(__file__).resolve().parent
+    ps_hook_file = hook_dir / "devdeck-hook.ps1"
+    sh_hook_file = hook_dir / "devdeck-hook.sh"
+
+    marker_start = "# >>> DevDeck Universal Hook >>>"
+    marker_end = "# <<< DevDeck Universal Hook <<<"
+
+    installed = []
+
+    # 1. PowerShell Profile
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "echo $PROFILE"],
+            capture_output=True, text=True, timeout=5
+        )
+        profile_path_str = res.stdout.strip()
+        if profile_path_str:
+            profile_path = Path(profile_path_str)
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            existing = profile_path.read_text(encoding="utf-8", errors="replace") if profile_path.exists() else ""
+            if marker_start not in existing:
+                hook_code = ps_hook_file.read_text(encoding="utf-8") if ps_hook_file.exists() else ""
+                with open(profile_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n{marker_start}\n{hook_code}\n{marker_end}\n")
+                installed.append(f"PowerShell ($PROFILE -> {profile_path})")
+            else:
+                installed.append(f"PowerShell (already installed in {profile_path})")
+    except Exception as e:
+        print(f"[Hook Warning] Could not install to PowerShell: {e}")
+
+    # 2. Bash/Zsh Profile
+    for rc_name in [".bashrc", ".zshrc"]:
+        rc_path = Path.home() / rc_name
+        if rc_path.exists():
+            try:
+                existing = rc_path.read_text(encoding="utf-8", errors="replace")
+                if marker_start not in existing:
+                    with open(rc_path, "a", encoding="utf-8") as f:
+                        f.write(f"\n{marker_start}\n[ -f \"{sh_hook_file.as_posix()}\" ] && source \"{sh_hook_file.as_posix()}\"\n{marker_end}\n")
+                    installed.append(f"{rc_name} ({rc_path})")
+            except Exception:
+                pass
+
+    print("=" * 65)
+    print("✨ DevDeck Universal Terminal Hook Installed!")
+    print("=" * 65)
+    for item in installed:
+        print(f"  ✓ {item}")
+    print("\n💡 Any command error in PowerShell, VS Code, or Antigravity terminals")
+    print("   will now automatically transmit to your paired DevDeck device!")
+    print("=" * 65)
+
+
+def uninstall_shell_hook() -> None:
+    marker_start = "# >>> DevDeck Universal Hook >>>"
+    marker_end = "# <<< DevDeck Universal Hook <<<"
+    pattern = re.compile(rf"{re.escape(marker_start)}.*?{re.escape(marker_end)}\n?", re.DOTALL)
+
+    uninstalled = []
+
+    # 1. PowerShell Profile
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "echo $PROFILE"],
+            capture_output=True, text=True, timeout=5
+        )
+        profile_path_str = res.stdout.strip()
+        if profile_path_str:
+            profile_path = Path(profile_path_str)
+            if profile_path.exists():
+                content = profile_path.read_text(encoding="utf-8", errors="replace")
+                if marker_start in content:
+                    clean = pattern.sub("", content)
+                    profile_path.write_text(clean, encoding="utf-8")
+                    uninstalled.append(f"PowerShell ($PROFILE -> {profile_path})")
+    except Exception as e:
+        print(f"[Hook Warning] Could not uninstall from PowerShell: {e}")
+
+    # 2. Bash/Zsh Profile
+    for rc_name in [".bashrc", ".zshrc"]:
+        rc_path = Path.home() / rc_name
+        if rc_path.exists():
+            try:
+                content = rc_path.read_text(encoding="utf-8", errors="replace")
+                if marker_start in content:
+                    clean = pattern.sub("", content)
+                    rc_path.write_text(clean, encoding="utf-8")
+                    uninstalled.append(f"{rc_name}")
+            except Exception:
+                pass
+
+    print("=" * 65)
+    print("🗑️ DevDeck Universal Hook Uninstalled.")
+    for item in uninstalled:
+        print(f"  ✓ Removed from {item}")
+    print("=" * 65)
+
+
+def hook_status() -> None:
+    marker_start = "# >>> DevDeck Universal Hook >>>"
+    ps_installed = False
+    profile_path = None
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "echo $PROFILE"],
+            capture_output=True, text=True, timeout=5
+        )
+        profile_path_str = res.stdout.strip()
+        if profile_path_str:
+            profile_path = Path(profile_path_str)
+            if profile_path.exists() and marker_start in profile_path.read_text(encoding="utf-8", errors="replace"):
+                ps_installed = True
+    except Exception:
+        pass
+
+    # Check relay status
+    relay_alive = False
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:8766/status", timeout=1) as resp:
+            if resp.status == 200:
+                relay_alive = True
+    except Exception:
+        pass
+
+    print("=" * 65)
+    print("🔍 DevDeck Shell Hook Status:")
+    print(f"• PowerShell Hook: {'✅ Installed' if ps_installed else '❌ Not Installed'}")
+    if profile_path:
+        print(f"  File: {profile_path}")
+    print(f"• Relay Ingestion Server (Port 8766): {'✅ Active / Listening' if relay_alive else '⚠️ Offline (start python relay_server.py)'}")
+    print("=" * 65)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("DevDeck Transparent Repair Runtime")
         print("Usage:")
         print("  python devdeck.py scan")
         print("  python devdeck.py run \"<command>\"")
+        print("  python devdeck.py install-hook")
+        print("  python devdeck.py uninstall-hook")
+        print("  python devdeck.py hook-status")
         print("  python devdeck.py replay <incident_id>")
         print("  python devdeck.py policy [suggest | approve | low-risk | auto]")
         sys.exit(1)
@@ -343,6 +481,15 @@ if __name__ == "__main__":
     command_type = sys.argv[1].lower()
     if command_type == "scan":
         scan_repository()
+        sys.exit(0)
+    elif command_type == "install-hook":
+        install_shell_hook()
+        sys.exit(0)
+    elif command_type == "uninstall-hook":
+        uninstall_shell_hook()
+        sys.exit(0)
+    elif command_type == "hook-status":
+        hook_status()
         sys.exit(0)
     elif command_type == "run":
         if len(sys.argv) < 3:
