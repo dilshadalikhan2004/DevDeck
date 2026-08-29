@@ -30,3 +30,7 @@ class TestGitTransactionEngine(unittest.TestCase):
         with open(self.test_file, "r") as f:
             content = f.read()
         self.assertEqual(content, "Line 1\nLine 2\nLine 3\n")
+
+    def test_git_rollback_is_disabled_for_repairs(self):
+        with self.assertRaisesRegex(RuntimeError, "Git rollback is disabled for repairs"):
+            self.engine.rollback_transaction(self.test_file, "legacy")

@@ -87,38 +87,7 @@ class GitTransactionEngine:
                 print(f"[Git] Commit transaction error: {e}")
 
     def rollback_transaction(self, file_path: str, transaction_id: str):
-        if not transaction_id:
-            return
-        try:
-            subprocess.run(
-                ['git', 'checkout', 'HEAD', '--', file_path],
-                capture_output=True,
-                timeout=3
-            )
-            print(f"[Git] Rolled back: {file_path}")
-
-            if transaction_id.startswith("devdeck_pre_repair_"):
-                result = subprocess.run(
-                    ['git', 'stash', 'list'],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                stash_list = result.stdout.splitlines()
-                stash_ref = None
-                for line in stash_list:
-                    if transaction_id in line:
-                        stash_ref = line.split(':')[0].strip()
-                        break
-                if stash_ref:
-                    subprocess.run(
-                        ['git', 'stash', 'pop', stash_ref],
-                        capture_output=True,
-                        timeout=5
-                    )
-                    print(f"[Git] Restored stash: {stash_ref}")
-        except Exception as e:
-            print(f"[Git] Rollback error: {e}")
+        raise RuntimeError("Git rollback is disabled for repairs; use FileTransaction.rollback")
 
 class FallbackBackupManager:
     def __init__(self, backup_dir=".devdeck/backups"):
