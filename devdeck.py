@@ -535,7 +535,11 @@ if __name__ == "__main__":
         if len(sys.argv) < 3:
             print("Usage: python devdeck.py run \"<command>\"")
             sys.exit(1)
-        sys.exit(run_command_with_watch(sys.argv[2]))
+        args_to_run = list(sys.argv[2:])
+        if args_to_run and args_to_run[0].lower() == "run":
+            args_to_run = args_to_run[1:]
+        command_str = " ".join(args_to_run)
+        sys.exit(run_command_with_watch(command_str))
     elif command_type == "replay":
         if len(sys.argv) < 3:
             print("Usage: python devdeck.py replay <incident_id>")

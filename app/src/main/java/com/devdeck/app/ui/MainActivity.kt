@@ -381,6 +381,16 @@ class MainActivity : ComponentActivity() {
                 "sandbox_done" -> viewModel.setSandboxRunning(false)
                 "sandbox_verified" -> onSandboxVerified(json)
                 "rerun_result", "repair_success", "repair_failed" -> onApplyOutcome(type, json)
+                "error" -> {
+                    val msg = json.optString("message", "Unknown error from laptop")
+                    val id = viewModel.uiState.value.activeIncidentId
+                    if (id != null) {
+                        viewModel.applyPipelineEvent(
+                            PipelineEvent(id, PipelineStage.SANDBOX_DRY_RUN, EventPhase.FAILED, "Relay error: $msg")
+                        )
+                    }
+                    viewModel.addLog("[Relay Error] $msg")
+                }
             }
         } catch (e: Exception) {
             viewModel.addLog("Error processing message: ${e.message}")

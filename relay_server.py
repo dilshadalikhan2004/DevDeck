@@ -141,9 +141,20 @@ async def relay(websocket):
                     if data.get("protocol_version") in (2, 3):
                         try:
                             repair, incident_data, target_path = repair_for_incident(data, incidents)
-                            data = {**data, "file": str(target_path)}
+                            data = {**data, "file": str(target_path) if target_path else ""}
                         except ValueError as error:
+                            print(f"⚠️ [Relay] Repair validation error: {error}")
                             await websocket.send(json.dumps({"type": "error", "message": str(error)}))
+                            if incident_id:
+                                await broadcast(make_event(
+                                    incident_id,
+                                    "sandbox_dry_run",
+                                    "failed",
+                                    f"Sandbox setup failed: {error}",
+                                    detail=str(error),
+                                    sandbox_passed=False,
+                                    sandbox_exit_code=1,
+                                ))
                             continue
 
                     target_file = data.get("file", "")
