@@ -7,8 +7,8 @@ function global:DevDeck-PromptHook {
         $lastHistory = Get-History -Count 1 -ErrorAction SilentlyContinue
         $lastCmd = if ($lastHistory) { $lastHistory.CommandLine } else { "" }
 
-        # Avoid catching our own hook commands or git status checks
-        if ($lastCmd -and $lastCmd -notlike "*devdeck*install*" -and $lastCmd -notlike "*DevDeck-PromptHook*") {
+        # Avoid catching devdeck CLI itself (which sends its own events) or hook prompts
+        if ($lastCmd -and ($lastCmd -notmatch "(?i)devdeck") -and ($lastCmd -notlike "*DevDeck-PromptHook*")) {
             try {
                 $errorMsg = ""
                 if ($global:Error -and $global:Error.Count -gt 0) {
@@ -24,16 +24,10 @@ function global:DevDeck-PromptHook {
                     source     = "powershell_hook"
                 } | ConvertTo-Json -Compress
 
-                # Try primary relay port 8766 (HTTP) and fallback 8765
-                try {
-                    Invoke-RestMethod -Uri "http://127.0.0.1:8766/incident" `
-                        -Method Post -Body $payload -ContentType "application/json" `
-                        -TimeoutSec 1 -ErrorAction Stop | Out-Null
-                } catch {
-                    Invoke-RestMethod -Uri "http://127.0.0.1:8765/incident" `
-                        -Method Post -Body $payload -ContentType "application/json" `
-                        -TimeoutSec 1 -ErrorAction SilentlyContinue | Out-Null
-                }
+                # HTTP Hook endpoint (Port 8766 ONLY)
+                Invoke-RestMethod -Uri "http://127.0.0.1:8766/incident" `
+                    -Method Post -Body $payload -ContentType "application/json" `
+                    -TimeoutSec 1 -ErrorAction SilentlyContinue | Out-Null
             } catch {
                 # Fail silently — never disrupt the user's terminal
             }
