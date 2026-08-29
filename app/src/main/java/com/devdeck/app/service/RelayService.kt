@@ -87,18 +87,37 @@ class RelayService : Service() {
 
     fun updatePairingAndReconnect(url: String, secret: String) {
         val prefs = getSecurePrefs()
+        val oldUrl = prefs.getString("relay_url", "")
+        val oldSecret = prefs.getString("pairing_secret", "")
         prefs.edit()
             .putString("relay_url", url)
             .putString("pairing_secret", secret)
             .apply()
-        reconnectAttempt = 0
-        handler.removeCallbacksAndMessages(null)
-        connect()
+
+        if (oldUrl != url || oldSecret != secret || !isConnected.get() || webSocket == null) {
+            reconnectAttempt = 0
+            handler.removeCallbacksAndMessages(null)
+            try {
+                webSocket?.close(1000, "Switching host")
+            } catch (e: Exception) {
+                webSocket?.cancel()
+            }
+            webSocket = null
+            isConnected.set(false)
+            connect()
+        }
     }
 
     fun reconnect() {
         reconnectAttempt = 0
         handler.removeCallbacksAndMessages(null)
+        try {
+            webSocket?.close(1000, "Manual reconnect")
+        } catch (e: Exception) {
+            webSocket?.cancel()
+        }
+        webSocket = null
+        isConnected.set(false)
         connect()
     }
 
@@ -115,7 +134,13 @@ class RelayService : Service() {
         )
     }
 
+    @Synchronized
     private fun connect() {
+        if (isConnected.get() && webSocket != null) {
+            Log.d(TAG, "Already connected to bridge, skipping redundant connect()")
+            return
+        }
+
         val prefs = getSecurePrefs()
         val url = prefs.getString("relay_url", "ws://10.0.2.2:8765") ?: "ws://10.0.2.2:8765"
         val secret = prefs.getString("pairing_secret", "DECK-POCKET-SAFE") ?: "DECK-POCKET-SAFE"
@@ -129,15 +154,14 @@ class RelayService : Service() {
             return
         }
 
-        webSocket?.cancel()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
+            override fun onOpen(ws: WebSocket, response: Response) {
                 isConnected.set(true)
                 reconnectAttempt = 0
                 updateNotification("Connected to Bridge")
                 
                 // Pair immediately
-                webSocket.send(JSONObject().apply {
+                ws.send(JSONObject().apply {
                     put("type", "pair")
                     put("secret", secret)
                     put("device_public_key", Build.MODEL ?: "Android-DevDeck")
@@ -146,32 +170,45 @@ class RelayService : Service() {
                 notifyListeners { it.onConnectionStateChanged(true) }
             }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
+            override fun onMessage(ws: WebSocket, text: String) {
                 notifyListeners { it.onMessageReceived(text) }
             }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                handleDisconnect("Connection closing: $reason")
+            override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                ws.close(1000, null)
+                handleDisconnect("Closing ($code: $reason)")
             }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                handleDisconnect("Connection failed: ${t.message}")
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                handleDisconnect("Closed ($code: $reason)")
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                handleDisconnect("Failure: ${t.message}")
             }
         })
     }
 
     private fun handleDisconnect(reason: String) {
         Log.d(TAG, "Disconnected: $reason")
-        isConnected.set(false)
-        updateNotification("Disconnected. Retrying...")
-        notifyListeners { it.onConnectionStateChanged(false) }
+        if (isConnected.getAndSet(false)) {
+            updateNotification("Disconnected. Retrying...")
+            notifyListeners { it.onConnectionStateChanged(false) }
+        }
+        webSocket = null
         scheduleReconnect()
     }
 
     private fun scheduleReconnect() {
-        val delay = (1L shl minOf(reconnectAttempt, 6)) * 1000L // Exponential backoff up to 64s
+        if (isConnected.get()) return
+        handler.removeCallbacksAndMessages(null)
+        val delay = (1L shl minOf(reconnectAttempt, 5)) * 1000L // 1s, 2s, 4s, 8s, 16s, 32s
         reconnectAttempt++
-        handler.postDelayed({ connect() }, delay)
+        handler.postDelayed({
+            if (!isConnected.get()) {
+                connect()
+            }
+        }, delay)
     }
 
     private fun notifyListeners(action: (RelayListener) -> Unit) {
