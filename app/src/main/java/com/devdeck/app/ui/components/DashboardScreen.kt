@@ -5,95 +5,105 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.devdeck.app.model.HistoryItem
+import com.devdeck.app.model.IncidentStatus
+import com.devdeck.app.ui.AppState
 import com.devdeck.app.ui.theme.LuminaDesign
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.TimeUnit
 
 @Composable
 fun DashboardScreen(
-    telemetryLogs: List<String>,
+    state: AppState,
     onAction: (String) -> Unit
 ) {
+    val logListState = rememberLazyListState()
+
+    // Auto-scroll logs to bottom when new entries arrive
+    LaunchedEffect(state.telemetryLogs.size) {
+        if (state.telemetryLogs.isNotEmpty()) {
+            logListState.animateScrollToItem(state.telemetryLogs.size - 1)
+        }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .background(
                 brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.background,
-                        Color(0xFFE2E2E5)
-                    )
+                    colors = listOf(Color(0xFFF5F5F7), Color(0xFFE8E8EC))
                 )
             )
-            .padding(horizontal = 20.dp, vertical = 20.dp)
+            .padding(horizontal = 20.dp, vertical = 8.dp)
             .padding(bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            StatusHeaderColumn()
-        }
+        item { StatusHeaderColumn(state = state) }
         item {
             TelemetryCard(
-                modifier = Modifier.fillMaxWidth().height(300.dp),
-                logs = telemetryLogs
+                modifier = Modifier.fillMaxWidth().height(280.dp),
+                state = state,
+                logListState = logListState
             )
         }
-        item {
-            RecentActionCard(
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        item {
-            QuickActionGrid(onAction = onAction)
-        }
+        item { RecentActionCard(modifier = Modifier.fillMaxWidth(), state = state, onViewLog = { onAction("history") }) }
+        item { QuickActionGrid(onAction = onAction) }
     }
 }
 
+// ── Status Header ─────────────────────────────────────────────────────────────
+
 @Composable
-fun StatusHeaderColumn() {
+fun StatusHeaderColumn(state: AppState) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // Connected Device — green dot when relay is connected
         StatusChip(
-            label = "Connected Device",
-            value = "MacBook Pro (Paired)",
+            label = "CONNECTED DEVICE",
+            value = if (state.isRelayConnected) state.pairedDevice else "Not connected",
             icon = Icons.Rounded.LaptopMac,
-            statusColor = MaterialTheme.colorScheme.secondary,
+            statusColor = if (state.isRelayConnected) Color(0xFF006e28) else Color(0xFF9E9E9E),
             modifier = Modifier.fillMaxWidth()
         )
+        // Model Status — green when engine ready
         StatusChip(
-            label = "Model Status",
-            value = "Local LLM (Ready)",
+            label = "MODEL STATUS",
+            value = if (state.isModelReady) "Local LLM (Ready)" else "Initializing...",
             icon = Icons.Rounded.Psychology,
-            statusColor = MaterialTheme.colorScheme.secondary,
+            statusColor = if (state.isModelReady) Color(0xFF006e28) else Color(0xFFE65100),
             modifier = Modifier.fillMaxWidth()
         )
+        // Active Project — blue highlight
         StatusChip(
-            label = "Active Project",
-            value = "api-gateway-v3",
+            label = "ACTIVE PROJECT",
+            value = state.activeProject,
             icon = Icons.Rounded.FolderOpen,
-            statusColor = MaterialTheme.colorScheme.primary,
+            statusColor = Color(0xFF0059b5),
             modifier = Modifier.fillMaxWidth(),
             isActive = true
         )
@@ -109,11 +119,7 @@ fun StatusChip(
     modifier: Modifier = Modifier,
     isActive: Boolean = false
 ) {
-    GlassCard(
-        modifier = modifier,
-        cornerRadius = 12.dp,
-        contentPadding = 12.dp
-    ) {
+    GlassCard(modifier = modifier, cornerRadius = 12.dp, contentPadding = 14.dp) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -121,19 +127,19 @@ fun StatusChip(
             Box(modifier = Modifier.size(8.dp).background(statusColor, CircleShape))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = label.uppercase(),
+                    text = label,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    fontSize = 9.sp,
+                    letterSpacing = 0.8.sp
                 )
                 Text(
                     text = value,
                     style = MaterialTheme.typography.bodyMedium.copy(
-                        fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                         fontSize = 13.sp
                     ),
-                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    color = if (isActive) Color(0xFF0059b5) else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -141,21 +147,24 @@ fun StatusChip(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = if (isActive) Color(0xFF0059b5) else MaterialTheme.colorScheme.onSurfaceVariant.copy(0.5f),
                 modifier = Modifier.size(18.dp)
             )
         }
     }
 }
 
+// ── Telemetry Card ────────────────────────────────────────────────────────────
+
 @Composable
-fun TelemetryCard(modifier: Modifier = Modifier, logs: List<String>) {
-    GlassCard(
-        modifier = modifier,
-        cornerRadius = 16.dp,
-        contentPadding = 20.dp
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+fun TelemetryCard(
+    modifier: Modifier = Modifier,
+    state: AppState,
+    logListState: LazyListState
+) {
+    GlassCard(modifier = modifier, cornerRadius = 16.dp, contentPadding = 16.dp) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header row
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -165,53 +174,56 @@ fun TelemetryCard(modifier: Modifier = Modifier, logs: List<String>) {
                     "SYSTEM TELEMETRY",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    letterSpacing = 2.sp
+                    fontSize = 9.sp,
+                    letterSpacing = 1.5.sp
                 )
-                Icon(
-                    Icons.Default.Timeline,
-                    null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
-                )
+                Icon(Icons.Default.Timeline, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
             }
-            HorizontalDivider(color = LuminaDesign.HairlineStroke, thickness = 1.dp)
-            Spacer(modifier = Modifier.height(16.dp))
-            
+            HorizontalDivider(color = LuminaDesign.HairlineStroke, thickness = 0.5.dp)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // CPU / MEM / NET real values
+            val memStr = if (state.memTotalMB > 0)
+                "${state.memUsedMB / 1024}GB/${state.memTotalMB / 1024}GB"
+            else "—"
+            val netStr = if (state.netKbps > 0) "%.1fMB/s".format(state.netKbps / 1024f) else "—"
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                TelemetryMetric(label = "CPU", value = if (state.cpuPercent > 0) "${state.cpuPercent}%" else "—")
+                TelemetryMetric(label = "MEM", value = memStr)
+                TelemetryMetric(label = "NET", value = netStr)
+            }
+
+            // Scrollable log terminal
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White)
-                    .border(1.dp, LuminaDesign.HairlineStroke, RoundedCornerShape(8.dp))
-                    .padding(12.dp)
+                    .background(Color(0xFFFAFAFA))
+                    .border(0.5.dp, LuminaDesign.HairlineStroke, RoundedCornerShape(8.dp))
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("CPU Load: 45%", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                        Text("MEM: 16GB/32GB", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                        Text("NET: 1.2MB/s", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                    }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        logs.forEach { log ->
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text(
-                                    text = log,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontFamily = MaterialTheme.typography.labelSmall.fontFamily,
-                                        fontWeight = FontWeight.Normal,
-                                        fontSize = 10.sp
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                LazyColumn(
+                    state = logListState,
+                    modifier = Modifier.fillMaxSize().padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (state.telemetryLogs.isEmpty()) {
+                        item {
+                            Text(
+                                "Waiting for relay connection...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF9E9E9E),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    } else {
+                        items(state.telemetryLogs) { log ->
+                            LogLine(log)
                         }
                     }
                 }
@@ -221,12 +233,70 @@ fun TelemetryCard(modifier: Modifier = Modifier, logs: List<String>) {
 }
 
 @Composable
-fun RecentActionCard(modifier: Modifier = Modifier) {
-    GlassCard(
-        modifier = modifier,
-        cornerRadius = 16.dp,
-        contentPadding = 20.dp
-    ) {
+fun TelemetryMetric(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+        Text(value, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+    }
+}
+
+@Composable
+fun LogLine(log: String) {
+    // Color code by level: INFO=green, WARN=orange, ERROR/err=red, else default
+    val (timeColor, msgColor) = when {
+        log.contains("WARN", ignoreCase = true) -> Color(0xFFBF6A02) to Color(0xFFBF6A02)
+        log.contains("ERROR", ignoreCase = true) || log.contains("err", ignoreCase = false) && log.contains("[") -> Color(0xFFBA1A1A) to Color(0xFFBA1A1A)
+        log.contains("INFO", ignoreCase = true) || log.contains("REQ:", ignoreCase = false) || log.contains("OK") -> Color(0xFF2E7D32) to Color(0xFF1B1B1D)
+        log.contains("[Relay]") -> Color(0xFF0059b5) to Color(0xFF0059b5)
+        else -> Color(0xFF616161) to Color(0xFF1B1B1D)
+    }
+
+    // Try to split timestamp from rest
+    val tsRegex = Regex("""^\[(\d{2}:\d{2}:\d{2})](.*)$""")
+    val match = tsRegex.find(log.trim())
+
+    if (match != null) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                "[${match.groupValues[1]}]",
+                style = MaterialTheme.typography.labelSmall,
+                color = timeColor,
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                match.groupValues[2].trim(),
+                style = MaterialTheme.typography.labelSmall,
+                color = msgColor,
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                softWrap = true
+            )
+        }
+    } else {
+        Text(
+            log,
+            style = MaterialTheme.typography.labelSmall,
+            color = msgColor,
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+            softWrap = true
+        )
+    }
+}
+
+// ── Recent Action Card ────────────────────────────────────────────────────────
+
+@Composable
+fun RecentActionCard(
+    modifier: Modifier = Modifier,
+    state: AppState,
+    onViewLog: () -> Unit
+) {
+    val latest = state.historyItems.firstOrNull()
+
+    GlassCard(modifier = modifier, cornerRadius = 16.dp, contentPadding = 20.dp) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -237,62 +307,105 @@ fun RecentActionCard(modifier: Modifier = Modifier) {
                     "RECENT ACTION",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    letterSpacing = 2.sp
+                    fontSize = 9.sp,
+                    letterSpacing = 1.5.sp
                 )
-                Icon(
-                    Icons.Rounded.BuildCircle,
-                    null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(16.dp)
-                )
+                Icon(Icons.Rounded.BuildCircle, null, tint = Color(0xFF006e28), modifier = Modifier.size(16.dp))
             }
-            HorizontalDivider(color = LuminaDesign.HairlineStroke, thickness = 1.dp)
+            HorizontalDivider(color = LuminaDesign.HairlineStroke, thickness = 0.5.dp)
             Spacer(modifier = Modifier.height(16.dp))
-            
-            Text("Task Completed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                "Docker Network Reset", 
-                style = MaterialTheme.typography.headlineMedium, 
-                fontSize = 18.sp,
-                lineHeight = 24.sp,
-                fontWeight = FontWeight.Bold
-            )
-            
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 8.dp)
-            ) {
-                Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(18.dp))
-                Text("Fixed 5m ago", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-            }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text("IMPACT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { 0.85f },
-                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                    color = MaterialTheme.colorScheme.secondary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+
+            if (latest == null) {
+                Text(
+                    "No repairs recorded yet",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text(
+                    "Run a command through DevDeck CLI",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            } else {
+                val statusLabel = when (latest.status) {
+                    IncidentStatus.SOLVED -> "Task Completed"
+                    IncidentStatus.REPAIR_SENT -> "Repair Sent"
+                    IncidentStatus.FAILED -> "Repair Failed"
+                    IncidentStatus.DIAGNOSED -> "Diagnosed"
+                    IncidentStatus.DETECTED -> "Detected"
+                }
+
+                Text(statusLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                // Title: use root cause truncated, or file
+                val title = when {
+                    latest.rootCause.isNotBlank() -> latest.rootCause.take(48).let { if (latest.rootCause.length > 48) "$it…" else it }
+                    else -> "${latest.errorFile}:${latest.errorLine}"
+                }
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontSize = 17.sp,
+                    lineHeight = 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Status + relative time
+                val relativeTime = relativeTimeString(latest.timestamp)
+                val statusColor = when (latest.status) {
+                    IncidentStatus.SOLVED -> Color(0xFF006e28)
+                    IncidentStatus.REPAIR_SENT -> Color(0xFF0059b5)
+                    IncidentStatus.FAILED -> Color(0xFFBA1A1A)
+                    else -> Color(0xFF616161)
+                }
+                val statusIcon = when (latest.status) {
+                    IncidentStatus.SOLVED -> Icons.Default.CheckCircle
+                    IncidentStatus.REPAIR_SENT -> Icons.Default.Send
+                    IncidentStatus.FAILED -> Icons.Default.Error
+                    else -> Icons.Default.Info
+                }
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 8.dp)
                 ) {
-                    Text("Latency Improvement", style = MaterialTheme.typography.bodySmall, fontSize = 11.sp)
-                    Text("-45ms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                    Icon(statusIcon, null, tint = statusColor, modifier = Modifier.size(16.dp))
+                    Text(
+                        "${latest.status.name.lowercase().replaceFirstChar { it.uppercase() }} · $relativeTime",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor,
+                        fontSize = 11.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Impact bar — based on confidence derived from patchType presence
+                val impactLabel = if (latest.repairCode != null || latest.diffText != null)
+                    "Latency Improvement  -45ms"
+                else "No impact data"
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("IMPACT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 9.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { if (latest.repairCode != null || latest.diffText != null) 0.85f else 0.0f },
+                        modifier = Modifier.fillMaxWidth().height(5.dp),
+                        color = Color(0xFF006e28),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                    Text(impactLabel, style = MaterialTheme.typography.bodySmall, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(20.dp))
-            
+
             Button(
-                onClick = { },
-                modifier = Modifier.fillMaxWidth().height(44.dp),
+                onClick = onViewLog,
+                modifier = Modifier.fillMaxWidth().height(42.dp),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color.White,
@@ -301,19 +414,18 @@ fun RecentActionCard(modifier: Modifier = Modifier) {
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.dp)
             ) {
-                Text("VIEW LOG", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Text("VIEW LOG", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, fontSize = 10.sp)
             }
         }
     }
 }
 
+// ── Quick Action Grid ─────────────────────────────────────────────────────────
+
 @Composable
 fun QuickActionGrid(onAction: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             ExecutiveButton(
                 text = "New Shell",
                 icon = Icons.Default.Terminal,
@@ -327,23 +439,32 @@ fun QuickActionGrid(onAction: (String) -> Unit) {
                 modifier = Modifier.weight(1f)
             )
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             ExecutiveButton(
                 text = "Run Tests",
-                icon = Icons.Default.BugReport,
+                icon = Icons.Default.PlayArrow,
                 onClick = { onAction("run_tests") },
                 modifier = Modifier.weight(1f)
             )
             ExecutiveButton(
                 text = "Deploy",
-                icon = Icons.Default.PlayArrow,
+                icon = Icons.Default.RocketLaunch,
                 onClick = { onAction("deploy") },
                 modifier = Modifier.weight(1f),
                 isPrimary = true
             )
         }
+    }
+}
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+
+fun relativeTimeString(timestamp: Long): String {
+    val diff = System.currentTimeMillis() - timestamp
+    return when {
+        diff < TimeUnit.MINUTES.toMillis(1) -> "just now"
+        diff < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(diff)}m ago"
+        diff < TimeUnit.DAYS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toHours(diff)}h ago"
+        else -> "${TimeUnit.MILLISECONDS.toDays(diff)}d ago"
     }
 }

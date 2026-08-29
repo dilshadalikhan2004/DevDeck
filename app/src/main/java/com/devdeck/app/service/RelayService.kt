@@ -72,6 +72,8 @@ class RelayService : Service() {
         listeners.remove(listener)
     }
 
+    fun isConnected(): Boolean = isConnected.get()
+
     fun sendMessage(text: String): Boolean {
         val currentWs = webSocket
         return if (currentWs != null && isConnected.get()) {

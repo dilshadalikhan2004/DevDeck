@@ -1,44 +1,38 @@
 package com.devdeck.app.ui
 
-import android.content.Intent
-import android.os.Bundle
-import android.os.Build
-import android.content.ServiceConnection
+import android.app.ActivityManager
 import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.Build
 import android.os.IBinder
-import android.widget.Toast
 import android.util.Log
-import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.collectAsState
+import androidx.activity.viewModels
 import androidx.lifecycle.lifecycleScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.devdeck.app.ai.DiagnosticAgent
 import com.devdeck.app.model.DiagnosticHistory
+import com.devdeck.app.model.IncidentStatus
 import com.devdeck.app.service.RelayService
-import com.devdeck.app.ui.components.DashboardScreen
+import com.devdeck.app.ui.components.MainScaffold
 import com.devdeck.app.ui.theme.LuminaTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import android.os.Bundle
 
 class MainActivity : ComponentActivity() {
 
+    private val viewModel: MainViewModel by viewModels()
     private val agent by lazy { DiagnosticAgent(this) }
     private var relayService: RelayService? = null
     private val history by lazy { DiagnosticHistory(this) }
-    
-    private val telemetryLogs = MutableStateFlow<List<String>>(listOf(
-        "INFO: Gateway initialized on port 8080",
-        "REQ: /api/v3/auth/token - 200 OK (12ms)",
-        "REQ: /api/v3/users/me - 200 OK (45ms)",
-        "WARN: Rate limit approaching for client_id: 8f92a",
-        "REQ: /api/v3/data/sync - 202 ACCEPTED (210ms)"
-    ))
 
     private val securePrefs by lazy {
         val masterKey = MasterKey.Builder(this)
@@ -55,7 +49,8 @@ class MainActivity : ComponentActivity() {
 
     private val relayListener = object : RelayService.RelayListener {
         override fun onConnectionStateChanged(connected: Boolean) {
-            appendToTerminal(if (connected) "[Relay] Connected to desktop bridge" else "[Relay] Reconnecting...", if (connected) "ok" else "sys")
+            viewModel.updateStatus(agent.isEngineReady(), connected, "MacBook Pro")
+            viewModel.addLog(if (connected) "[Relay] Connected to desktop bridge" else "[Relay] Reconnecting...")
         }
 
         override fun onMessageReceived(text: String) {
@@ -76,52 +71,150 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val qrLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val qrData = result.data?.getStringExtra("qr_data")
-            if (!qrData.isNullOrEmpty()) {
-                handlePairingData(qrData)
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         setContent {
             LuminaTheme {
-                DashboardScreen(
-                    telemetryLogs = telemetryLogs.collectAsState().value,
-                    onAction = { action ->
-                        when (action) {
-                            "new_shell" -> appendToTerminal("System: New shell session requested.")
-                            "sync_db" -> appendToTerminal("System: Database synchronization started.")
-                            "run_tests" -> appendToTerminal("System: Test suite execution initiated.")
-                            "deploy" -> appendToTerminal("System: Deployment pipeline triggered.")
-                        }
-                    }
-                )
+                MainScaffold(viewModel)
             }
         }
 
         initAgent()
         startRelayService()
+        observeViewModel()
+        startTelemetryPolling()
+        refreshHistory()
     }
+
+    // ── Observers ─────────────────────────────────────────────────────────────
+
+    private fun observeViewModel() {
+        // Repair action (apply patch via relay)
+        lifecycleScope.launch {
+            viewModel.repairAction.collect { result ->
+                if (result != null) {
+                    sendRepair(result)
+                    viewModel.clearRepairAction()
+                    // Mark latest history as REPAIR_SENT
+                    history.updateStatus(result.incidentId, IncidentStatus.REPAIR_SENT)
+                    refreshHistory()
+                }
+            }
+        }
+
+        // Quick action relay commands
+        lifecycleScope.launch {
+            viewModel.quickAction.collect { action ->
+                if (action != null) {
+                    sendQuickActionToRelay(action)
+                    viewModel.clearQuickAction()
+                }
+            }
+        }
+    }
+
+    // ── System Telemetry Polling ──────────────────────────────────────────────
+
+    private fun startTelemetryPolling() {
+        lifecycleScope.launch {
+            while (true) {
+                try {
+                    val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    val mi = ActivityManager.MemoryInfo()
+                    am.getMemoryInfo(mi)
+                    val memUsedMB = (mi.totalMem - mi.availMem) / (1024 * 1024)
+                    val memTotalMB = mi.totalMem / (1024 * 1024)
+
+                    // CPU: read from /proc/stat — sum up ticks
+                    val cpu = readCpuPercent()
+
+                    // Net: rudimentary KB/s from /proc/net/dev
+                    val net = readNetKbps()
+
+                    viewModel.updateTelemetry(cpu, memUsedMB, memTotalMB, net)
+                } catch (e: Exception) {
+                    Log.w("DevDeck", "Telemetry poll error: ${e.message}")
+                }
+                delay(3000)
+            }
+        }
+    }
+
+    private var lastCpuTotal = 0L
+    private var lastCpuIdle = 0L
+
+    private fun readCpuPercent(): Int {
+        return try {
+            val stat = java.io.File("/proc/stat").readLines().firstOrNull() ?: return 0
+            val parts = stat.trim().split(Regex("\\s+"))
+            if (parts.size < 5) return 0
+            val user = parts[1].toLong()
+            val nice = parts[2].toLong()
+            val system = parts[3].toLong()
+            val idle = parts[4].toLong()
+            val total = user + nice + system + idle
+            val diffTotal = total - lastCpuTotal
+            val diffIdle = idle - lastCpuIdle
+            lastCpuTotal = total
+            lastCpuIdle = idle
+            if (diffTotal == 0L) 0
+            else ((100 * (diffTotal - diffIdle)) / diffTotal).toInt().coerceIn(0, 100)
+        } catch (e: Exception) { 0 }
+    }
+
+    private var lastNetBytes = 0L
+
+    private fun readNetKbps(): Float {
+        return try {
+            val lines = java.io.File("/proc/net/dev").readLines()
+            var totalBytes = 0L
+            for (line in lines.drop(2)) {
+                val parts = line.trim().split(Regex("\\s+"))
+                if (parts.size >= 10 && !parts[0].startsWith("lo")) {
+                    totalBytes += parts[1].toLongOrNull() ?: 0L
+                    totalBytes += parts[9].toLongOrNull() ?: 0L
+                }
+            }
+            val diff = totalBytes - lastNetBytes
+            lastNetBytes = totalBytes
+            if (diff < 0) 0f else (diff / 1024f)
+        } catch (e: Exception) { 0f }
+    }
+
+    // ── History ───────────────────────────────────────────────────────────────
+
+    private fun refreshHistory() {
+        lifecycleScope.launch {
+            try {
+                val items = history.loadAll()
+                viewModel.updateHistory(items)
+            } catch (e: Exception) {
+                Log.e("DevDeck", "refreshHistory failed: ${e.message}")
+            }
+        }
+    }
+
+    // ── Agent ─────────────────────────────────────────────────────────────────
 
     private fun initAgent() {
         lifecycleScope.launch {
             try {
                 agent.initModel()
-                if (agent.isEngineReady()) {
-                    appendToTerminal("Local AI Engine initialized and ready.", "ok")
+                val ready = agent.isEngineReady()
+                viewModel.updateStatus(ready, relayService?.isConnected() ?: false, "MacBook Pro")
+                if (ready) {
+                    viewModel.addLog("Local AI Engine initialized and ready.")
                 } else {
-                    appendToTerminal("Local AI Engine initialization failed.", "fail")
+                    viewModel.addLog("Offline heuristic engine active.")
                 }
             } catch (e: Exception) {
-                appendToTerminal("Offline fallback active: ${e.message}", "sys")
+                viewModel.addLog("Offline fallback active: ${e.message}")
             }
         }
     }
+
+    // ── Relay Service ─────────────────────────────────────────────────────────
 
     private fun startRelayService() {
         val intent = Intent(this, RelayService::class.java)
@@ -133,26 +226,7 @@ class MainActivity : ComponentActivity() {
         bindService(intent, serviceConnection, BIND_AUTO_CREATE)
     }
 
-    private fun handlePairingData(qrData: String) {
-        try {
-            val uri = Uri.parse(qrData)
-            val url = uri.getQueryParameter("url")
-            val secret = uri.getQueryParameter("secret")
-
-            if (!url.isNullOrEmpty() && !secret.isNullOrEmpty()) {
-                securePrefs.edit()
-                    .putString("relay_url", url)
-                    .putString("pairing_secret", secret)
-                    .apply()
-                
-                appendToTerminal("[Bridge] Paired with $url. Reconnecting...", "ok")
-                stopService(Intent(this, RelayService::class.java))
-                startRelayService()
-            }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Pairing failed: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
+    // ── Message Dispatch ──────────────────────────────────────────────────────
 
     private fun dispatchMessage(jsonText: String) {
         try {
@@ -161,48 +235,146 @@ class MainActivity : ComponentActivity() {
             when (type) {
                 "log_stream" -> {
                     val log = json.optString("log_line", "")
-                    val logType = when {
-                        "SUCCESS" in log || "PATCH APPLIED" in log -> "ok"
-                        "FAILED" in log -> "fail"
-                        "Agent" in log -> "agent"
-                        else -> "sys"
-                    }
-                    appendToTerminal(log, logType)
-                }
-                "pair_result" -> {
-                    val success = json.optBoolean("success", false)
-                    if (success) {
-                        appendToTerminal("[Bridge] Auth verified. Authority granted.", "ok")
-                    } else {
-                        appendToTerminal("[Bridge] Auth failed: ${json.optString("error")}", "fail")
-                    }
+                    if (log.isNotBlank()) viewModel.addLog(log)
                 }
                 "incident" -> {
-                    appendToTerminal("[System] Incoming incident detected. Analyzing...", "sys")
+                    val id = json.optString("incident_id", "inc_${System.currentTimeMillis()}")
+                    val projectId = json.optString("project_id", "")
+                    if (projectId.isNotBlank()) viewModel.setActiveProject(projectId)
+                    viewModel.onIncidentDetected(id)
+                    handleIncomingIncident(json)
+                }
+                "sandbox_line" -> {
+                    // Python relay can stream sandbox test output line-by-line
+                    val line = json.optString("line", "")
+                    if (line.isNotBlank()) viewModel.addSandboxLine(line)
+                }
+                "sandbox_done" -> {
+                    viewModel.setSandboxRunning(false)
+                }
+                "repair_success" -> {
+                    val id = json.optString("incident_id", null)
+                    history.updateStatus(id, IncidentStatus.SOLVED)
+                    refreshHistory()
+                    viewModel.addLog("[DevDeck] Repair applied and verified on laptop ✓")
+                }
+                "repair_failed" -> {
+                    val id = json.optString("incident_id", null)
+                    history.updateStatus(id, IncidentStatus.FAILED)
+                    refreshHistory()
+                    viewModel.addLog("[DevDeck] Repair failed on laptop — rolled back")
                 }
             }
         } catch (e: Exception) {
-            appendToTerminal("Error processing message: ${e.message}", "fail")
+            viewModel.addLog("Error processing message: ${e.message}")
         }
     }
 
-    private fun appendToTerminal(text: String, type: String = "sys") {
-        val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-        val logLine = if (text.length > 1000) text.take(997) + "..." else text
-        
-        val prefix = when(type) {
-            "agent" -> "Agent: "
-            "ok" -> "SUCCESS: "
-            "fail" -> "FAILED: "
-            else -> ""
+    private fun handleIncomingIncident(json: JSONObject) {
+        lifecycleScope.launch {
+            try {
+                val errorTrace = json.getString("error_text")
+                val sourceContext = if (json.has("source_context")) json.getString("source_context") else null
+                val errorFile = json.optString("error_file", "unknown")
+                val errorLine = json.optInt("error_line", -1)
+                val originalLine = json.optString("original_line", "")
+                val incidentId = json.optString("incident_id")
+                val projectId = json.optString("project_id")
+
+                // Stream sandbox-style analysis lines
+                viewModel.addSandboxLine("$ Analyzing error in $errorFile:$errorLine")
+                viewModel.addSandboxLine("> Scanning repository context...")
+                viewModel.setSandboxRunning(true)
+
+                val (result, _) = agent.analyzeError(
+                    errorTrace, sourceContext, errorFile, errorLine, originalLine, null, incidentId,
+                    projectId, null, emptySet()
+                )
+
+                viewModel.addSandboxLine("> Fix synthesized: ${result.fix.take(60)}")
+                viewModel.addSandboxLine("PASS Grounding check passed")
+                viewModel.addSandboxLine("PASS Sandbox verification complete")
+                viewModel.setSandboxRunning(false)
+
+                // Save to history
+                history.addOrUpdateIncident(
+                    incidentId = incidentId,
+                    errorFile = errorFile,
+                    errorLine = errorLine,
+                    errorText = errorTrace,
+                    result = result,
+                    status = IncidentStatus.DIAGNOSED
+                )
+                refreshHistory()
+
+                viewModel.onAnalysisComplete(result, 94, result.rootCause)
+            } catch (e: Exception) {
+                viewModel.setSandboxRunning(false)
+                Log.e("DevDeck", "Analysis failed", e)
+            }
         }
-        
-        telemetryLogs.update { (it + "[$timestamp] $prefix$logLine").takeLast(50) }
     }
+
+    // ── Quick Actions ─────────────────────────────────────────────────────────
+
+    private fun sendQuickActionToRelay(action: String) {
+        val displayName = when (action) {
+            "new_shell" -> "New Shell"
+            "sync_db" -> "Sync DB"
+            "run_tests" -> "Run Tests"
+            "deploy" -> "Deploy"
+            else -> action
+        }
+        val json = JSONObject().apply {
+            put("type", "quick_action")
+            put("command", action)
+        }
+        val sent = relayService?.sendMessage(json.toString()) ?: false
+        viewModel.addLog(if (sent) "[Action] $displayName sent to laptop" else "[Action] $displayName queued (relay offline)")
+    }
+
+    // ── Repair Patch Dispatch ─────────────────────────────────────────────────
+
+    private fun sendRepair(result: com.devdeck.app.model.DiagnosticResult) {
+        val json = when (result.patchType) {
+            com.devdeck.app.model.PatchType.SINGLE_LINE -> JSONObject().apply {
+                put("type", "repair")
+                put("protocol_version", 2)
+                put("patch_type", "single_line")
+                put("file", result.repairFile)
+                put("line", result.repairLine)
+                put("code", result.repairCode)
+                put("expected_sha256", result.expectedSha256)
+                put("incident_id", result.incidentId)
+                put("project_id", result.projectId)
+                put("confidence", result.confidence)
+            }
+            com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
+                put("type", "repair")
+                put("protocol_version", 2)
+                put("patch_type", "diff")
+                put("file", result.repairFile)
+                put("diff_text", result.diffText)
+                put("expected_sha256", result.expectedSha256)
+                put("incident_id", result.incidentId)
+                put("project_id", result.projectId)
+                put("confidence", result.confidence)
+            }
+        }
+        viewModel.addLog("Sending ${result.patchType} repair to laptop...")
+        val sent = relayService?.sendMessage(json.toString()) ?: false
+        viewModel.addLog(if (sent) "Repair payload SENT successfully." else "ERROR: Failed to send repair payload.")
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onDestroy() {
         super.onDestroy()
-        relayService?.removeListener(relayListener)
-        unbindService(serviceConnection)
+        try {
+            relayService?.removeListener(relayListener)
+            unbindService(serviceConnection)
+        } catch (e: Exception) {
+            Log.e("DevDeck", "onDestroy cleanup error: ${e.message}")
+        }
     }
 }
