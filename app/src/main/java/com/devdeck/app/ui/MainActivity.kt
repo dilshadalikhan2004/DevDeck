@@ -6,10 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.lifecycle.lifecycleScope
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -21,11 +24,8 @@ import com.devdeck.app.service.RelayService
 import com.devdeck.app.ui.components.MainScaffold
 import com.devdeck.app.ui.theme.LuminaTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
-import android.os.Bundle
 
 class MainActivity : ComponentActivity() {
 
@@ -47,10 +47,29 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    // Camera QR scanner launcher
+    private val qrScannerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val qrData = result.data?.getStringExtra("qr_data")
+            if (!qrData.isNullOrBlank()) {
+                handleScannedQrData(qrData)
+            } else {
+                Toast.makeText(this, "No QR data found", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     private val relayListener = object : RelayService.RelayListener {
         override fun onConnectionStateChanged(connected: Boolean) {
-            viewModel.updateStatus(agent.isEngineReady(), connected, "MacBook Pro")
-            viewModel.addLog(if (connected) "[Relay] Connected to desktop bridge" else "[Relay] Reconnecting...")
+            val savedDevice = securePrefs.getString("paired_device_name", "Developer Machine") ?: "Developer Machine"
+            val deviceLabel = if (connected) savedDevice else "Not Connected"
+            viewModel.updateStatus(agent.isEngineReady(), connected, deviceLabel)
+            viewModel.addLog(
+                if (connected) "[Relay] Connected to bridge ($savedDevice)"
+                else "[Relay] Bridge disconnected — Retrying..."
+            )
         }
 
         override fun onMessageReceived(text: String) {
@@ -76,7 +95,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             LuminaTheme {
-                MainScaffold(viewModel)
+                MainScaffold(
+                    viewModel = viewModel,
+                    onLaunchScanner = { launchCameraScanner() },
+                    onManualConnect = { url, secret -> applyManualPairing(url, secret) }
+                )
             }
         }
 
@@ -85,6 +108,58 @@ class MainActivity : ComponentActivity() {
         observeViewModel()
         startTelemetryPolling()
         refreshHistory()
+    }
+
+    // ── QR & Pairing Logic ───────────────────────────────────────────────────
+
+    fun launchCameraScanner() {
+        val intent = Intent(this, CameraActivity::class.java).apply {
+            putExtra(CameraActivity.EXTRA_PAIRING_MODE, true)
+        }
+        qrScannerLauncher.launch(intent)
+    }
+
+    fun applyManualPairing(url: String, secret: String) {
+        val targetUrl = if (url.startsWith("ws://") || url.startsWith("wss://")) url else "ws://$url"
+        securePrefs.edit()
+            .putString("relay_url", targetUrl)
+            .putString("pairing_secret", secret)
+            .apply()
+        relayService?.updatePairingAndReconnect(targetUrl, secret)
+        viewModel.showPairDevice(false)
+        viewModel.addLog("[Pairing] Connecting to $targetUrl...")
+        Toast.makeText(this, "Connecting to $targetUrl", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun handleScannedQrData(data: String) {
+        try {
+            val json = JSONObject(data)
+            val url = json.optString("url", "")
+            val secret = json.optString("secret", "DECK-POCKET-SAFE")
+            val deviceName = json.optString("device_name", json.optString("host", "Developer Machine"))
+
+            if (url.isNotBlank()) {
+                securePrefs.edit()
+                    .putString("relay_url", url)
+                    .putString("pairing_secret", secret)
+                    .putString("paired_device_name", deviceName)
+                    .apply()
+
+                viewModel.updateStatus(agent.isEngineReady(), true, deviceName)
+                relayService?.updatePairingAndReconnect(url, secret)
+                viewModel.showPairDevice(false)
+                viewModel.addLog("[Pairing] Successfully paired with $deviceName ($url)")
+                Toast.makeText(this, "Paired with $deviceName", Toast.LENGTH_SHORT).show()
+                return
+            }
+        } catch (e: Exception) {
+            // Raw ws:// or wss:// URL scanned
+            if (data.startsWith("ws://") || data.startsWith("wss://")) {
+                applyManualPairing(data, "DECK-POCKET-SAFE")
+                return
+            }
+        }
+        Toast.makeText(this, "Unrecognized QR format", Toast.LENGTH_SHORT).show()
     }
 
     // ── Observers ─────────────────────────────────────────────────────────────
@@ -202,7 +277,9 @@ class MainActivity : ComponentActivity() {
             try {
                 agent.initModel()
                 val ready = agent.isEngineReady()
-                viewModel.updateStatus(ready, relayService?.isConnected() ?: false, "MacBook Pro")
+                val savedDevice = securePrefs.getString("paired_device_name", "Developer Machine") ?: "Developer Machine"
+                val connected = relayService?.isConnected() ?: false
+                viewModel.updateStatus(ready, connected, if (connected) savedDevice else "Not Connected")
                 if (ready) {
                     viewModel.addLog("Local AI Engine initialized and ready.")
                 } else {
@@ -233,6 +310,18 @@ class MainActivity : ComponentActivity() {
             val json = JSONObject(jsonText)
             val type = json.optString("type", "unknown")
             when (type) {
+                "pair_result" -> {
+                    val success = json.optBoolean("success", false)
+                    if (success) {
+                        val deviceName = json.optString("device_name", json.optString("host", "Developer Machine"))
+                        securePrefs.edit().putString("paired_device_name", deviceName).apply()
+                        viewModel.updateStatus(agent.isEngineReady(), true, deviceName)
+                        viewModel.addLog("[Relay] Paired successfully with $deviceName")
+                    } else {
+                        val error = json.optString("error", "Pairing failed")
+                        viewModel.addLog("[Relay] Authentication error: $error")
+                    }
+                }
                 "log_stream" -> {
                     val log = json.optString("log_line", "")
                     if (log.isNotBlank()) viewModel.addLog(log)
@@ -274,7 +363,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val errorTrace = json.getString("error_text")
-                val sourceContext = if (json.has("source_context")) json.getString("source_context") else null
+                val sourceContext: String? = if (json.has("source_context")) json.getString("source_context") else null
                 val errorFile = json.optString("error_file", "unknown")
                 val errorLine = json.optInt("error_line", -1)
                 val originalLine = json.optString("original_line", "")

@@ -19,8 +19,19 @@
 > Task :app:processDebugResources UP-TO-DATE
 
 > Task :app:compileDebugKotlin
-w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:15:8 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
-w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:16:8 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:15:8 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:16:8 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:104:25 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:104:35 'constructor(p0: @NonNull() Context!): MasterKey.Builder' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:105:27 'class MasterKey : Any' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:105:37 'enum class KeyScheme : Enum<MasterKey.KeyScheme!>' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:107:16 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:111:13 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:111:40 'enum class PrefKeyEncryptionScheme : Enum<EncryptedSharedPreferences.PrefKeyEncryptionScheme!>' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:112:13 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/service/RelayService.kt:112:40 'enum class PrefValueEncryptionScheme : Enum<EncryptedSharedPreferences.PrefValueEncryptionScheme!>' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:18:8 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:19:8 'class MasterKey : Any' is deprecated. Deprecated in Java.
 w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:38:25 'class MasterKey : Any' is deprecated. Deprecated in Java.
 w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:38:35 'constructor(p0: @NonNull() Context!): MasterKey.Builder' is deprecated. Deprecated in Java.
 w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:39:27 'class MasterKey : Any' is deprecated. Deprecated in Java.
@@ -30,9 +41,8 @@ w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devd
 w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:45:40 'enum class PrefKeyEncryptionScheme : Enum<EncryptedSharedPreferences.PrefKeyEncryptionScheme!>' is deprecated. Deprecated in Java.
 w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:46:13 'class EncryptedSharedPreferences : Any, SharedPreferences' is deprecated. Deprecated in Java.
 w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:46:40 'enum class PrefValueEncryptionScheme : Enum<EncryptedSharedPreferences.PrefValueEncryptionScheme!>' is deprecated. Deprecated in Java.
-w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:256:60 Java type mismatch: inferred type is 'kotlin.Nothing?', but 'kotlin.String' was expected.
-w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:262:60 Java type mismatch: inferred type is 'kotlin.Nothing?', but 'kotlin.String' was expected.
-w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/components/DashboardScreen.kt:365:65 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:345:60 Java type mismatch: inferred type is 'kotlin.Nothing?', but 'kotlin.String' was expected.
+w: file:///C:/Users/LENOVO/Downloads/receipts-android/app/src/main/java/com/devdeck/app/ui/MainActivity.kt:351:60 Java type mismatch: inferred type is 'kotlin.Nothing?', but 'kotlin.String' was expected.
 
 [Incubating] Problems report is available at: file:///C:/Users/LENOVO/Downloads/receipts-android/build/reports/problems/problems-report.html
 
@@ -42,6 +52,6 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 For more on this, please refer to https://docs.gradle.org/9.3.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
 
-BUILD SUCCESSFUL in 4s
+BUILD SUCCESSFUL in 7s
 17 actionable tasks: 1 executed, 16 up-to-date
 Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.3.0/userguide/configuration_cache_enabling.html

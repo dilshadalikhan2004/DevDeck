@@ -17,12 +17,21 @@ import com.devdeck.app.ui.RepairState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScaffold(viewModel: MainViewModel) {
+fun MainScaffold(
+    viewModel: MainViewModel,
+    onLaunchScanner: () -> Unit = {},
+    onManualConnect: (String, String) -> Unit = { _, _ -> }
+) {
     val state by viewModel.uiState.collectAsState()
 
     // Pair Device full-screen overlay (shown over everything)
     if (state.showPairDevice) {
-        PairDeviceScreen(onDismiss = { viewModel.showPairDevice(false) })
+        PairDeviceScreen(
+            state = state,
+            onDismiss = { viewModel.showPairDevice(false) },
+            onLaunchScanner = onLaunchScanner,
+            onManualConnect = onManualConnect
+        )
         return
     }
 

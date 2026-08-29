@@ -83,6 +83,23 @@ class RelayService : Service() {
         }
     }
 
+    fun updatePairingAndReconnect(url: String, secret: String) {
+        val prefs = getSecurePrefs()
+        prefs.edit()
+            .putString("relay_url", url)
+            .putString("pairing_secret", secret)
+            .apply()
+        reconnectAttempt = 0
+        handler.removeCallbacksAndMessages(null)
+        connect()
+    }
+
+    fun reconnect() {
+        reconnectAttempt = 0
+        handler.removeCallbacksAndMessages(null)
+        connect()
+    }
+
     private fun getSecurePrefs(): SharedPreferences {
         val masterKey = MasterKey.Builder(this)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -98,8 +115,8 @@ class RelayService : Service() {
 
     private fun connect() {
         val prefs = getSecurePrefs()
-        val url = prefs.getString("relay_url", null) ?: return
-        val secret = prefs.getString("pairing_secret", null) ?: return
+        val url = prefs.getString("relay_url", "ws://10.0.2.2:8765") ?: "ws://10.0.2.2:8765"
+        val secret = prefs.getString("pairing_secret", "DECK-POCKET-SAFE") ?: "DECK-POCKET-SAFE"
 
         Log.d(TAG, "Connecting to $url")
 
@@ -118,7 +135,11 @@ class RelayService : Service() {
                 updateNotification("Connected to Bridge")
                 
                 // Pair immediately
-                webSocket.send(JSONObject().put("type", "pair").put("secret", secret).toString())
+                webSocket.send(JSONObject().apply {
+                    put("type", "pair")
+                    put("secret", secret)
+                    put("device_public_key", Build.MODEL ?: "Android-DevDeck")
+                }.toString())
                 
                 notifyListeners { it.onConnectionStateChanged(true) }
             }

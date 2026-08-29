@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
@@ -362,7 +363,7 @@ fun RecentActionCard(
                 }
                 val statusIcon = when (latest.status) {
                     IncidentStatus.SOLVED -> Icons.Default.CheckCircle
-                    IncidentStatus.REPAIR_SENT -> Icons.Default.Send
+                    IncidentStatus.REPAIR_SENT -> Icons.AutoMirrored.Filled.Send
                     IncidentStatus.FAILED -> Icons.Default.Error
                     else -> Icons.Default.Info
                 }

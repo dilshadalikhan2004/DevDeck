@@ -17,6 +17,7 @@ from pairing_state import PairingRegistry
 from sandbox_verifier import SandboxVerifier
 from repair_memory import RepairMemory
 import sys
+import platform
 
 if sys.platform == "win32":
     try:
@@ -103,8 +104,15 @@ async def relay(websocket):
 
                     if is_valid:
                         authenticated_clients.add(websocket)
-                        print(f"✅ [Relay] Client {addr} authenticated successfully.")
-                        await websocket.send(json.dumps({"type": "pair_result", "success": True}))
+                        device_label = f"{socket.gethostname()} ({platform.system()})"
+                        print(f"✅ [Relay] Client {addr} authenticated successfully with {device_label}.")
+                        await websocket.send(json.dumps({
+                            "type": "pair_result",
+                            "success": True,
+                            "device_name": device_label,
+                            "host": socket.gethostname(),
+                            "system": platform.system(),
+                        }))
                     else:
                         print(f"❌ [Relay] Client {addr} failed authentication.")
                         await websocket.send(json.dumps({"type": "pair_result", "success": False, "error": "Invalid secret or expired token"}))
@@ -256,18 +264,55 @@ async def main():
 
     # Print local IPs
     hostname = socket.gethostname()
+    os_name = platform.system()
+    device_label = f"{hostname} ({os_name})"
     local_ips = ["127.0.0.1"]
+    primary_ip = "127.0.0.1"
     try:
         for ip in socket.gethostbyname_ex(hostname)[2]:
             if not ip.startswith("127."):
                 local_ips.append(ip)
+                primary_ip = ip
     except Exception:
         pass
 
+    pairing_data = {
+        "url": f"ws://{primary_ip}:{port}",
+        "secret": PAIRING_SECRET,
+        "device_name": device_label,
+        "host": hostname,
+        "os": os_name,
+    }
+    pairing_json = json.dumps(pairing_data)
+
     print("=" * 65)
     print("🚀 DevDeck Transparent Repair Runtime Bridge")
+    print(f"• Host Device: {device_label}")
     print(f"• Listening on: ws://localhost:{port} / ws://0.0.0.0:{port}")
+    print(f"• Local Network IP: {primary_ip}")
     print(f"• Autonomy Policy: {repair_memory.get_policy().level.value}")
+    print(f"• Pairing Secret: {PAIRING_SECRET}")
+    print("=" * 65)
+    print("\n📱 [DevDeck] Scan this QR Code with DevDeck Android App to Pair:\n")
+
+    if HAS_QRCODE:
+        try:
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=1,
+                border=2,
+            )
+            qr.add_data(pairing_json)
+            qr.make(fit=True)
+            qr.print_ascii(invert=True)
+        except Exception as qre:
+            print(f"[QR Error]: {qre}")
+            print(f"Pairing JSON: {pairing_json}")
+    else:
+        print(f"Pairing JSON: {pairing_json}")
+
+    print("\n💡 Alternatively, use ADB reverse: adb reverse tcp:8765 tcp:8765")
     print("=" * 65)
 
     async with websockets.serve(relay, host, port):
