@@ -26,9 +26,7 @@ object PipelineReducer {
         if (base.correctionRounds >= MAX_CORRECTION_ROUNDS) {
             return base.copy(
                 correctionCapReached = true,
-                failureSummary = event.message.ifBlank {
-                    "Correction limit reached. Review the candidate manually instead of another AI attempt."
-                }
+                failureSummary = "Correction limit reached. Review the candidate manually instead of another AI attempt."
             )
         }
         if (base.outcome !in reopenable && base.outcome != PipelineOutcome.IN_PROGRESS) {
