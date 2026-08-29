@@ -246,6 +246,14 @@ def scan_repository(project_root: str | Path | None = None) -> None:
     }))
 
 
+def parse_run_command(args: list[str]) -> str:
+    """Join remaining argv into a command, dropping duplicated ``run`` keywords."""
+    cleaned = list(args)
+    while cleaned and cleaned[0].lower() == "run":
+        cleaned.pop(0)
+    return " ".join(cleaned).strip()
+
+
 def run_command_with_watch(command: str) -> int:
     root = Path.cwd()
     memory = RepairMemory(root)
@@ -266,6 +274,7 @@ def run_command_with_watch(command: str) -> int:
         shell=True,
         stdout=sys.stdout,
         stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
         text=True,
         env=env
     )
@@ -278,7 +287,21 @@ def run_command_with_watch(command: str) -> int:
         payload = build_incident_payload(command, stderr, root)
 
         print(f"\n● Failure captured")
-        print(f"  {command} failed at {payload['error_file']}:{payload['error_line']}")
+        file_label = payload.get("error_file") or "unknown"
+        line_label = payload.get("error_line") if payload.get("error_line") is not None else "unknown"
+        print(f"  {command} failed at {file_label}:{line_label}")
+
+        unlocated = not payload.get("error_file") or payload.get("error_line") is None
+        if unlocated:
+            payload["error_file"] = payload.get("error_file") or "unknown"
+            payload["error_line"] = payload.get("error_line") or 0
+            payload["validation_error"] = True
+            payload["validation_message"] = (
+                "No source file/line could be parsed from this failure. "
+                "If you typed `devdeck.py run run <cmd>`, drop the extra `run` keyword "
+                "(example: python devdeck.py run python -m unittest)."
+            )
+            print(f"  {payload['validation_message']}")
 
         receipt = payload.get("context_receipt")
         if receipt:
@@ -297,6 +320,14 @@ def run_command_with_watch(command: str) -> int:
         )
         events.append(payload)
         events.append(make_event(payload["incident_id"], "sent_to_phone", "completed", "Incident handed to paired phone"))
+        if payload.get("validation_error"):
+            events.append(make_event(
+                payload["incident_id"],
+                "crash_detected",
+                "failed",
+                payload["validation_message"],
+                detail=payload.get("error_text"),
+            ))
         asyncio.run(send_events(events))
 
         # Log incident in memory
@@ -532,13 +563,15 @@ if __name__ == "__main__":
         hook_status()
         sys.exit(0)
     elif command_type == "run":
-        if len(sys.argv) < 3:
+        command_str = parse_run_command(sys.argv[2:])
+        if not command_str:
             print("Usage: python devdeck.py run \"<command>\"")
+            print("Unquoted arguments are joined, and extra 'run' keywords are ignored.")
+            asyncio.run(send_event({
+                "type": "error",
+                "message": "Missing command after 'run'. Example: python devdeck.py run python -m unittest",
+            }))
             sys.exit(1)
-        args_to_run = list(sys.argv[2:])
-        if args_to_run and args_to_run[0].lower() == "run":
-            args_to_run = args_to_run[1:]
-        command_str = " ".join(args_to_run)
         sys.exit(run_command_with_watch(command_str))
     elif command_type == "replay":
         if len(sys.argv) < 3:

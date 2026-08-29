@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
+
+from subprocess_guard import isolated_env, run_command_isolated
 
 
 @dataclass(frozen=True)
@@ -50,21 +51,19 @@ class SandboxRunner:
             if sandbox not in candidate.parents or not candidate.is_file():
                 return SandboxResult(False, None, "", "sandbox target is outside copied project")
             candidate.write_text(candidate_content, encoding="utf-8")
-            result = subprocess.run(
+            exit_code, stdout, stderr, timed_out, _ = run_command_isolated(
                 command,
-                shell=True,
                 cwd=sandbox,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
+                timeout_seconds=self.timeout_seconds,
+                env=isolated_env(sandbox),
             )
+            if timed_out:
+                return SandboxResult(False, 124, self._tail(stdout), self._tail(stderr) or "sandbox timeout", True)
             return SandboxResult(
-                result.returncode == 0,
-                result.returncode,
-                self._tail(result.stdout),
-                self._tail(result.stderr),
+                exit_code == 0,
+                exit_code,
+                self._tail(stdout),
+                self._tail(stderr),
             )
-        except subprocess.TimeoutExpired as error:
-            return SandboxResult(False, None, self._tail(error.stdout), "sandbox timeout", True)
         finally:
             shutil.rmtree(sandbox, ignore_errors=True)

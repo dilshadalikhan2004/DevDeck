@@ -1,5 +1,6 @@
 from pathlib import Path
 import pytest
+import sys
 import tempfile
 import json
 import shutil
@@ -80,7 +81,7 @@ class TestSandboxVerifier:
 
         proof, trust = SandboxVerifier.verify_patch(
             project_root=tmp_path,
-            command="python hang.py",
+            command=f'"{sys.executable}" hang.py',
             patch_type="single_line",
             target_file="hang.py",
             line_num=1,
@@ -91,6 +92,24 @@ class TestSandboxVerifier:
         assert proof.sandbox_passed is False
         assert proof.exit_code == 124
         assert "timed out" in proof.sandbox_stderr.lower()
+
+    def test_sandbox_verification_does_not_hang_on_blocking_stdin(self, tmp_path):
+        waiter = tmp_path / "wait_input.py"
+        waiter.write_text("input('prompt')\n", encoding="utf-8")
+
+        proof, _ = SandboxVerifier.verify_patch(
+            project_root=tmp_path,
+            command=f'"{sys.executable}" wait_input.py',
+            patch_type="single_line",
+            target_file="wait_input.py",
+            line_num=1,
+            repair_code="input('prompt')",
+            timeout_seconds=8,
+        )
+
+        assert proof.sandbox_passed is False
+        assert proof.exit_code != 124
+        assert proof.execution_duration_ms < 5000
 
 
 class TestRepairMemoryAndPolicy:

@@ -383,10 +383,17 @@ class MainActivity : ComponentActivity() {
                 "rerun_result", "repair_success", "repair_failed" -> onApplyOutcome(type, json)
                 "error" -> {
                     val msg = json.optString("message", "Unknown error from laptop")
-                    val id = viewModel.uiState.value.activeIncidentId
-                    if (id != null) {
+                    val incidentId = json.optString("incident_id").ifBlank {
+                        viewModel.uiState.value.activeIncidentId.orEmpty()
+                    }
+                    if (incidentId.isNotBlank()) {
                         viewModel.applyPipelineEvent(
-                            PipelineEvent(id, PipelineStage.SANDBOX_DRY_RUN, EventPhase.FAILED, "Relay error: $msg")
+                            PipelineEvent(
+                                incidentId,
+                                PipelineStage.CRASH_DETECTED,
+                                EventPhase.FAILED,
+                                "Relay error: $msg"
+                            )
                         )
                     }
                     viewModel.addLog("[Relay Error] $msg")
@@ -491,7 +498,7 @@ class MainActivity : ComponentActivity() {
                 val errorTrace = json.getString("error_text")
                 val sourceContext: String? = if (json.has("source_context")) json.getString("source_context") else null
                 val errorFile = json.optString("error_file", "unknown")
-                val errorLine = json.optInt("error_line", -1)
+                val errorLine = if (json.isNull("error_line")) -1 else json.optInt("error_line", -1)
                 val originalLine = json.optString("original_line", "")
                 val incidentId = json.optString("incident_id")
                 val projectId = json.optString("project_id")
@@ -500,6 +507,18 @@ class MainActivity : ComponentActivity() {
                 val symbols = mutableSetOf<String>()
                 json.optJSONArray("allowed_symbols")?.let { arr ->
                     for (i in 0 until arr.length()) symbols.add(arr.optString(i))
+                }
+
+                if (json.optBoolean("validation_error", false)) {
+                    val msg = json.optString(
+                        "validation_message",
+                        "Failure had no parseable source location"
+                    )
+                    viewModel.applyPipelineEvent(
+                        PipelineEvent(incidentId, PipelineStage.CRASH_DETECTED, EventPhase.FAILED, msg)
+                    )
+                    viewModel.addLog("[Validation] $msg")
+                    return@launch
                 }
 
                 // 1. Diagnosing Stage

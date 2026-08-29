@@ -7,6 +7,7 @@ import websockets
 import json
 import os
 import socket
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -331,6 +332,15 @@ async def relay(websocket):
                     if len(incident_history) > 50:
                         incident_history.pop(0)
 
+                    if data.get("validation_error"):
+                        await broadcast(make_event(
+                            incident_id,
+                            "crash_detected",
+                            "failed",
+                            data.get("validation_message") or "Command failed without a parseable source location",
+                            detail=data.get("error_text"),
+                        ))
+
                 # Broadcast to all clients
                 await broadcast(data, exclude=websocket)
 
@@ -444,6 +454,37 @@ class HookHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
 
+def free_port(p: int) -> None:
+    """Terminate orphan listeners on *p* so a restart can bind cleanly (WinError 10048)."""
+    if sys.platform != "win32":
+        return
+    try:
+        out = subprocess.check_output(
+            f"netstat -ano -p tcp | findstr :{p}",
+            shell=True,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return
+    pids: set[int] = set()
+    for line in out.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 5 and "LISTENING" in parts:
+            try:
+                pid = int(parts[-1])
+            except ValueError:
+                continue
+            if pid not in (0, os.getpid()):
+                pids.add(pid)
+    for pid in pids:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            timeout=10,
+        )
+
+
 def start_http_server(host: str = "0.0.0.0", http_port: int = 8766):
     try:
         server = http.server.ThreadingHTTPServer((host, http_port), HookHTTPHandler)
@@ -463,6 +504,9 @@ async def main():
     port = 8765
     http_port = 8766
 
+    free_port(port)
+    free_port(http_port)
+
     # Start HTTP Hook Listener
     start_http_server(host, http_port)
 
@@ -479,22 +523,6 @@ async def main():
                 primary_ip = ip
     except Exception:
         pass
-
-    def free_port(p: int):
-        if sys.platform == "win32":
-            try:
-                out = subprocess.check_output(f"netstat -ano -p tcp | findstr :{p}", shell=True, text=True, stderr=subprocess.DEVNULL)
-                for line in out.strip().splitlines():
-                    parts = line.strip().split()
-                    if len(parts) >= 5 and "LISTENING" in parts:
-                        pid = int(parts[-1])
-                        if pid != os.getpid():
-                            os.kill(pid, 9)
-            except Exception:
-                pass
-
-    free_port(port)
-    free_port(http_port)
 
     pairing_data = {
         "url": f"ws://{primary_ip}:{port}",

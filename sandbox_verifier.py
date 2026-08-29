@@ -5,16 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-import os
 import re
 import shutil
-import subprocess
-import sys
 import tempfile
-import time
 
 from bridge_security import canonical_project_root, compute_sha256, resolve_project_file
 from patch_manager import _apply_unified_diff, _dry_run_syntax_check
+from subprocess_guard import isolated_env, run_command_isolated
 
 
 @dataclass(frozen=True)
@@ -182,57 +179,25 @@ class SandboxVerifier:
                     emit("PASS tests/core/memory-limits.spec.js")
                     emit("PASS tests/plugins/loader-integrity.spec.js")
 
-                    # Configure fully isolated, non-interactive environment
-                    env = os.environ.copy()
-                    py_paths = [str(sandbox_root.resolve())]
-                    if (sandbox_root / "src").is_dir():
-                        py_paths.append(str((sandbox_root / "src").resolve()))
-                    if env.get("PYTHONPATH"):
-                        py_paths.append(env["PYTHONPATH"])
-                    env["PYTHONPATH"] = os.pathsep.join(py_paths)
-                    env["PYTHONUNBUFFERED"] = "1"
-                    env["CI"] = "1"
-                    env["DEBIAN_FRONTEND"] = "noninteractive"
-
-                    start_t = time.time()
-                    p = subprocess.Popen(
+                    env = isolated_env(sandbox_root)
+                    exit_code, stdout, stderr, timed_out, duration_ms = run_command_isolated(
                         command,
-                        cwd=str(sandbox_root),
-                        shell=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        stdin=subprocess.DEVNULL,
+                        cwd=sandbox_root,
+                        timeout_seconds=timeout_seconds,
                         env=env,
                     )
-                    try:
-                        out_b, err_b = p.communicate(timeout=timeout_seconds)
-                        duration_ms = int((time.time() - start_t) * 1000)
-                        stdout = out_b.decode("utf-8", errors="replace") if out_b else ""
-                        stderr = err_b.decode("utf-8", errors="replace") if err_b else ""
-                        exit_code = p.returncode
-                        sandbox_passed = (exit_code == 0)
+                    sandbox_passed = (exit_code == 0) and not timed_out
 
-                        if sandbox_passed:
-                            emit(f"PASS tests/verification/command-exit.spec.js (0 exit code in {duration_ms}ms)")
-                            emit(f"Test Suites: 6 passed, 6 total")
-                        else:
-                            emit(f"FAIL tests/verification/command-exit.spec.js (exit code {exit_code})")
-                            if stderr:
-                                for err_line in stderr.strip().splitlines()[:3]:
-                                    emit(f"  {err_line}")
-                    except subprocess.TimeoutExpired:
-                        if sys.platform == "win32":
-                            subprocess.run(f"taskkill /F /T /PID {p.pid}", shell=True, capture_output=True)
-                        p.kill()
-                        try:
-                            out_b, _ = p.communicate(timeout=2)
-                            stdout = (out_b.decode("utf-8", errors="replace") if out_b else "")[-2000:]
-                        except Exception:
-                            stdout = ""
-                        stderr = f"Sandbox verification timed out after {timeout_seconds}s — possible infinite loop or hung process."
-                        exit_code = 124
-                        sandbox_passed = False
+                    if timed_out:
                         emit(f"FAIL tests/verification/timeout.spec.js ({timeout_seconds}s timeout exceeded)")
+                    elif sandbox_passed:
+                        emit(f"PASS tests/verification/command-exit.spec.js (0 exit code in {duration_ms}ms)")
+                        emit(f"Test Suites: 6 passed, 6 total")
+                    else:
+                        emit(f"FAIL tests/verification/command-exit.spec.js (exit code {exit_code})")
+                        if stderr:
+                            for err_line in stderr.strip().splitlines()[:3]:
+                                emit(f"  {err_line}")
 
             except Exception as e:
                 stderr = f"Sandbox execution exception: {str(e)}"

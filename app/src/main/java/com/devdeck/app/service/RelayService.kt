@@ -29,6 +29,7 @@ class RelayService : Service() {
 
     private var webSocket: WebSocket? = null
     private val isConnected = AtomicBoolean(false)
+    private val connecting = AtomicBoolean(false)
     private var reconnectAttempt = 0
     private val handler = Handler(Looper.getMainLooper())
     private val binder = LocalBinder()
@@ -96,7 +97,9 @@ class RelayService : Service() {
 
         if (oldUrl != url || oldSecret != secret || !isConnected.get() || webSocket == null) {
             reconnectAttempt = 0
-            handler.removeCallbacksAndMessages(null)
+            handler.removeCallbacks(reconnectRunnable)
+            handler.removeCallbacks(notifyDisconnected)
+            connecting.set(false)
             try {
                 webSocket?.close(1000, "Switching host")
             } catch (e: Exception) {
@@ -110,7 +113,9 @@ class RelayService : Service() {
 
     fun reconnect() {
         reconnectAttempt = 0
-        handler.removeCallbacksAndMessages(null)
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(notifyDisconnected)
+        connecting.set(false)
         try {
             webSocket?.close(1000, "Manual reconnect")
         } catch (e: Exception) {
@@ -140,7 +145,12 @@ class RelayService : Service() {
             Log.d(TAG, "Already connected to bridge, skipping redundant connect()")
             return
         }
+        if (!connecting.compareAndSet(false, true)) {
+            Log.d(TAG, "Connection already in progress, skipping redundant connect()")
+            return
+        }
 
+        handler.removeCallbacks(reconnectRunnable)
         val prefs = getSecurePrefs()
         val url = prefs.getString("relay_url", "ws://10.0.2.2:8765") ?: "ws://10.0.2.2:8765"
         val secret = prefs.getString("pairing_secret", "DECK-POCKET-SAFE") ?: "DECK-POCKET-SAFE"
@@ -151,13 +161,16 @@ class RelayService : Service() {
             Request.Builder().url(url).build()
         } catch (e: Exception) {
             Log.e(TAG, "Invalid URL: $url")
+            connecting.set(false)
             return
         }
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                connecting.set(false)
                 isConnected.set(true)
                 reconnectAttempt = 0
+                handler.removeCallbacks(notifyDisconnected)
                 updateNotification("Connected to Bridge")
                 
                 // Pair immediately
@@ -189,26 +202,37 @@ class RelayService : Service() {
         })
     }
 
-    private fun handleDisconnect(reason: String) {
-        Log.d(TAG, "Disconnected: $reason")
-        if (isConnected.getAndSet(false)) {
+    private val reconnectRunnable = Runnable {
+        if (!isConnected.get() && !connecting.get()) {
+            connect()
+        }
+    }
+
+    private val notifyDisconnected = Runnable {
+        if (!isConnected.get()) {
             updateNotification("Disconnected. Retrying...")
             notifyListeners { it.onConnectionStateChanged(false) }
         }
+    }
+
+    private fun handleDisconnect(reason: String) {
+        Log.d(TAG, "Disconnected: $reason")
+        connecting.set(false)
+        val wasConnected = isConnected.getAndSet(false)
         webSocket = null
+        if (wasConnected) {
+            handler.removeCallbacks(notifyDisconnected)
+            handler.postDelayed(notifyDisconnected, 1200)
+        }
         scheduleReconnect()
     }
 
     private fun scheduleReconnect() {
-        if (isConnected.get()) return
-        handler.removeCallbacksAndMessages(null)
+        if (isConnected.get() || connecting.get()) return
+        handler.removeCallbacks(reconnectRunnable)
         val delay = (1L shl minOf(reconnectAttempt, 5)) * 1000L // 1s, 2s, 4s, 8s, 16s, 32s
         reconnectAttempt++
-        handler.postDelayed({
-            if (!isConnected.get()) {
-                connect()
-            }
-        }, delay)
+        handler.postDelayed(reconnectRunnable, delay)
     }
 
     private fun notifyListeners(action: (RelayListener) -> Unit) {
@@ -254,6 +278,9 @@ class RelayService : Service() {
     }
 
     override fun onDestroy() {
+        connecting.set(false)
+        handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(notifyDisconnected)
         webSocket?.cancel()
         super.onDestroy()
     }
