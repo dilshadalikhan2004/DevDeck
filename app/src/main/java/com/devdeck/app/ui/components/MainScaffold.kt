@@ -88,6 +88,11 @@ fun MainScaffold(
                                 // Handled in MainActivity via VM action flow
                                 viewModel.sendQuickAction(action)
                             }
+                            else -> {
+                                if (action.startsWith("dismiss:")) {
+                                    viewModel.dismissCompletedPipeline(action.removePrefix("dismiss:"))
+                                }
+                            }
                         }
                     }
                 )
@@ -123,7 +128,8 @@ fun RepairWorkspace(viewModel: MainViewModel, state: AppState) {
             selectedIncidentId = state.selectedIncidentId,
             selectedStage = state.selectedStage,
             onSelectIncident = { viewModel.selectIncident(it) },
-            onSelectStage = { viewModel.selectStage(it) }
+            onSelectStage = { viewModel.selectStage(it) },
+            onDismissIncident = { id -> viewModel.dismissCompletedPipeline(id) }
         )
         val selected = state.selectedStage
         if (pipeline != null && selected != null) {

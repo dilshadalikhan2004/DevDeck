@@ -285,21 +285,35 @@ class PatchManager:
             return True, ""
         return True, ""
 
-    def rerun_command(self, command: str) -> bool:
+    def rerun_command(self, command: str, timeout_seconds: int = 15) -> bool:
         print(f"[PatchManager] Rerunning command: {command}")
         try:
+            env = os.environ.copy()
+            py_paths = [str(self.project_root.resolve())]
+            if (self.project_root / "src").is_dir():
+                py_paths.append(str((self.project_root / "src").resolve()))
+            if env.get("PYTHONPATH"):
+                py_paths.append(env["PYTHONPATH"])
+            env["PYTHONPATH"] = os.pathsep.join(py_paths)
+            env["PYTHONUNBUFFERED"] = "1"
+            env["CI"] = "1"
+            env["DEBIAN_FRONTEND"] = "noninteractive"
+
             result = subprocess.run(
                 command,
+                cwd=str(self.project_root),
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=15
+                input="",
+                env=env,
+                timeout=timeout_seconds,
             )
             success = result.returncode == 0
             print(f"[PatchManager] Rerun {'SUCCESS (Exit 0)' if success else f'FAILED (Exit {result.returncode})'}")
             return success
         except subprocess.TimeoutExpired:
-            print("[PatchManager] Rerun TIMEOUT (>15s)")
+            print(f"[PatchManager] Rerun TIMEOUT (>{timeout_seconds}s)")
             return False
         except Exception as e:
             print(f"[PatchManager] Rerun error: {e}")

@@ -114,6 +114,37 @@ class MainViewModel : ViewModel() {
         _uiState.update { it.copy(selectedStage = stage) }
     }
 
+    fun dismissCompletedPipeline(incidentId: String) {
+        _uiState.update { state ->
+            val newById = state.pipelines.byId - incidentId
+            val newOrder = state.pipelines.order - incidentId
+            val nextPipelines = state.pipelines.copy(byId = newById, order = newOrder)
+            state.copy(
+                pipelines = nextPipelines,
+                selectedIncidentId = if (state.selectedIncidentId == incidentId) nextPipelines.order.lastOrNull() else state.selectedIncidentId,
+                activeIncidentId = if (state.activeIncidentId == incidentId) nextPipelines.order.lastOrNull() else state.activeIncidentId,
+                pendingReviewCount = nextPipelines.pendingReviewCount
+            )
+        }
+    }
+
+    fun clearFinishedPipelines() {
+        _uiState.update { state ->
+            val finishedIds = state.pipelines.byId.filterValues {
+                it.outcome in setOf(PipelineOutcome.COMPLETE, PipelineOutcome.ROLLED_BACK, PipelineOutcome.REJECTED)
+            }.keys
+            val newById = state.pipelines.byId - finishedIds
+            val newOrder = state.pipelines.order - finishedIds
+            val nextPipelines = state.pipelines.copy(byId = newById, order = newOrder)
+            state.copy(
+                pipelines = nextPipelines,
+                selectedIncidentId = if (state.selectedIncidentId in finishedIds) nextPipelines.order.lastOrNull() else state.selectedIncidentId,
+                activeIncidentId = if (state.activeIncidentId in finishedIds) nextPipelines.order.lastOrNull() else state.activeIncidentId,
+                pendingReviewCount = nextPipelines.pendingReviewCount
+            )
+        }
+    }
+
     fun onIncidentDetected(id: String) {
         applyPipelineEvent(
             PipelineEvent(id, PipelineStage.SENT_TO_PHONE, EventPhase.COMPLETED, "Incident received on phone")

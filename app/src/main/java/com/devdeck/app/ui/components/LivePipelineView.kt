@@ -27,10 +27,12 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -55,6 +57,7 @@ fun LivePipelineList(
     selectedStage: PipelineStage?,
     onSelectIncident: (String) -> Unit,
     onSelectStage: (PipelineStage) -> Unit,
+    onDismissIncident: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -66,13 +69,16 @@ fun LivePipelineList(
             )
         } else {
             incidents.asReversed().forEach { pipeline ->
-                PipelineIncidentCard(
-                    pipeline = pipeline,
-                    selected = pipeline.incidentId == selectedIncidentId,
-                    selectedStage = selectedStage.takeIf { pipeline.incidentId == selectedIncidentId },
-                    onSelectIncident = { onSelectIncident(pipeline.incidentId) },
-                    onSelectStage = onSelectStage
-                )
+                key(pipeline.incidentId) {
+                    PipelineIncidentCard(
+                        pipeline = pipeline,
+                        selected = pipeline.incidentId == selectedIncidentId,
+                        selectedStage = selectedStage.takeIf { pipeline.incidentId == selectedIncidentId },
+                        onSelectIncident = { onSelectIncident(pipeline.incidentId) },
+                        onSelectStage = onSelectStage,
+                        onDismiss = { onDismissIncident(pipeline.incidentId) }
+                    )
+                }
             }
         }
     }
@@ -84,7 +90,8 @@ fun PipelineIncidentCard(
     selected: Boolean,
     selectedStage: PipelineStage?,
     onSelectIncident: () -> Unit,
-    onSelectStage: (PipelineStage) -> Unit
+    onSelectStage: (PipelineStage) -> Unit,
+    onDismiss: () -> Unit = {}
 ) {
     GlassCard(
         modifier = Modifier
@@ -111,7 +118,22 @@ fun PipelineIncidentCard(
                         fontFamily = FontFamily.Monospace
                     )
                 }
-                TrustBanner(pipeline.fileTrust, pipeline.outcome)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TrustBanner(pipeline.fileTrust, pipeline.outcome)
+                    if (pipeline.outcome != PipelineOutcome.IN_PROGRESS && pipeline.outcome != PipelineOutcome.AWAITING_REVIEW) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Dismiss",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
             }
             HorizontalDivider(color = LuminaDesign.HairlineStroke, thickness = 0.5.dp)
             pipeline.displayNodes().forEach { snap ->

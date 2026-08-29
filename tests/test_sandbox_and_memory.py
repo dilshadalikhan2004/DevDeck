@@ -74,6 +74,24 @@ class TestSandboxVerifier:
         assert trust.sandbox_pass_score == 0
         assert trust.trust_level in ("LOW", "MEDIUM")
 
+    def test_sandbox_verification_handles_infinite_loop_timeout(self, tmp_path):
+        loop_file = tmp_path / "hang.py"
+        loop_file.write_text("import time\nwhile True:\n    time.sleep(0.1)\n", encoding="utf-8")
+
+        proof, trust = SandboxVerifier.verify_patch(
+            project_root=tmp_path,
+            command="python hang.py",
+            patch_type="single_line",
+            target_file="hang.py",
+            line_num=1,
+            repair_code="import time",
+            timeout_seconds=2,
+        )
+
+        assert proof.sandbox_passed is False
+        assert proof.exit_code == 124
+        assert "timed out" in proof.sandbox_stderr.lower()
+
 
 class TestRepairMemoryAndPolicy:
     def test_autonomy_policy_decisions(self):

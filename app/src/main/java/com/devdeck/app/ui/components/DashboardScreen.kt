@@ -90,7 +90,8 @@ fun DashboardScreen(
                         selectedIncidentId = state.selectedIncidentId,
                         selectedStage = null,
                         onSelectIncident = { onAction("repair") },
-                        onSelectStage = { onAction("repair") }
+                        onSelectStage = { onAction("repair") },
+                        onDismissIncident = { id -> onAction("dismiss:$id") }
                     )
                 }
             }

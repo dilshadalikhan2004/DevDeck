@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -132,7 +133,7 @@ class SandboxVerifier:
             blast_score = 20
 
         # 3. Create isolated sandbox environment
-        with tempfile.TemporaryDirectory(prefix="devdeck_sandbox_") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="devdeck_sandbox_", ignore_cleanup_errors=True) as temp_dir:
             sandbox_root = Path(temp_dir)
             
             # Copy project files (excluding heavy caches)
@@ -153,6 +154,7 @@ class SandboxVerifier:
             duration_ms = 0
 
             try:
+                syntax_ok = True
                 if sandbox_target and sandbox_target.is_file():
                     if patch_type.lower() == "single_line" and line_num is not None and repair_code is not None:
                         lines = sandbox_target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
@@ -172,53 +174,71 @@ class SandboxVerifier:
                         stderr = f"Sandbox Syntax Check Failed: {syntax_err}"
                         exit_code = 2
                         emit(f"FAIL tests/security/syntax-integrity.spec.js: {syntax_err}")
-                else:
+
+                if syntax_ok:
                     emit("PASS tests/security/network-isolation.spec.js")
                     emit("PASS tests/security/fs-readonly.spec.js")
                     emit("PASS tests/core/execution-engine.spec.js")
                     emit("PASS tests/core/memory-limits.spec.js")
                     emit("PASS tests/plugins/loader-integrity.spec.js")
 
-                    # Run command in sandbox
+                    # Configure fully isolated, non-interactive environment
                     env = os.environ.copy()
+                    py_paths = [str(sandbox_root.resolve())]
                     if (sandbox_root / "src").is_dir():
-                        src_path = str((sandbox_root / "src").resolve())
-                        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+                        py_paths.append(str((sandbox_root / "src").resolve()))
+                    if env.get("PYTHONPATH"):
+                        py_paths.append(env["PYTHONPATH"])
+                    env["PYTHONPATH"] = os.pathsep.join(py_paths)
+                    env["PYTHONUNBUFFERED"] = "1"
+                    env["CI"] = "1"
+                    env["DEBIAN_FRONTEND"] = "noninteractive"
 
                     start_t = time.time()
-                    proc = subprocess.run(
+                    p = subprocess.Popen(
                         command,
                         cwd=str(sandbox_root),
                         shell=True,
-                        capture_output=True,
-                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        stdin=subprocess.DEVNULL,
                         env=env,
-                        timeout=timeout_seconds,
                     )
-                    duration_ms = int((time.time() - start_t) * 1000)
-                    stdout = proc.stdout
-                    stderr = proc.stderr
-                    exit_code = proc.returncode
-                    sandbox_passed = (exit_code == 0)
+                    try:
+                        out_b, err_b = p.communicate(timeout=timeout_seconds)
+                        duration_ms = int((time.time() - start_t) * 1000)
+                        stdout = out_b.decode("utf-8", errors="replace") if out_b else ""
+                        stderr = err_b.decode("utf-8", errors="replace") if err_b else ""
+                        exit_code = p.returncode
+                        sandbox_passed = (exit_code == 0)
 
-                    if sandbox_passed:
-                        emit(f"PASS tests/verification/command-exit.spec.js (0 exit code in {duration_ms}ms)")
-                        emit(f"Test Suites: 6 passed, 6 total")
-                    else:
-                        emit(f"FAIL tests/verification/command-exit.spec.js (exit code {exit_code})")
-                        if stderr:
-                            for err_line in stderr.strip().splitlines()[:3]:
-                                emit(f"  {err_line}")
+                        if sandbox_passed:
+                            emit(f"PASS tests/verification/command-exit.spec.js (0 exit code in {duration_ms}ms)")
+                            emit(f"Test Suites: 6 passed, 6 total")
+                        else:
+                            emit(f"FAIL tests/verification/command-exit.spec.js (exit code {exit_code})")
+                            if stderr:
+                                for err_line in stderr.strip().splitlines()[:3]:
+                                    emit(f"  {err_line}")
+                    except subprocess.TimeoutExpired:
+                        if sys.platform == "win32":
+                            subprocess.run(f"taskkill /F /T /PID {p.pid}", shell=True, capture_output=True)
+                        p.kill()
+                        try:
+                            out_b, _ = p.communicate(timeout=2)
+                            stdout = (out_b.decode("utf-8", errors="replace") if out_b else "")[-2000:]
+                        except Exception:
+                            stdout = ""
+                        stderr = f"Sandbox verification timed out after {timeout_seconds}s — possible infinite loop or hung process."
+                        exit_code = 124
+                        sandbox_passed = False
+                        emit(f"FAIL tests/verification/timeout.spec.js ({timeout_seconds}s timeout exceeded)")
 
-            except subprocess.TimeoutExpired:
-                stderr = f"Sandbox verification timed out after {timeout_seconds}s"
-                exit_code = 124
-                emit(f"FAIL tests/verification/timeout.spec.js ({timeout_seconds}s timeout exceeded)")
             except Exception as e:
                 stderr = f"Sandbox execution exception: {str(e)}"
                 exit_code = 1
+                sandbox_passed = False
                 emit(f"FAIL tests/verification/exception.spec.js ({str(e)})")
-                exit_code = 1
 
         # 4. Calculate Trust Meter
         sandbox_score = 100 if sandbox_passed else 0
