@@ -20,6 +20,63 @@ class ParseRunCommandTest(unittest.TestCase):
     def test_empty_after_only_run_keywords(self):
         self.assertEqual("", parse_run_command(["run", "RUN"]))
 
+    def test_cli_invocation_error_only_for_run_token(self):
+        from devdeck import is_cli_invocation_error
+        self.assertTrue(is_cli_invocation_error("run python -m unittest"))
+        self.assertFalse(is_cli_invocation_error("python -m unittest tests/unit/test_receipts.py"))
+
+    def test_unittest_file_path_becomes_discover(self):
+        import tempfile
+        from pathlib import Path
+        from devdeck import normalize_watched_command
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            test_file = root / "tests" / "unit" / "test_receipts.py"
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text("ok\n", encoding="utf-8")
+            rewritten = normalize_watched_command(
+                "python -m unittest tests/unit/test_receipts.py",
+                root,
+            )
+            self.assertIn("discover", rewritten)
+            self.assertIn(' -s "tests/unit"', rewritten)
+            self.assertIn(' -p "test_receipts.py"', rewritten)
+            self.assertEqual(
+                rewritten,
+                normalize_watched_command(rewritten, root),
+            )
+
+
+class UnittestLocationTest(unittest.TestCase):
+    def test_unittest_import_error_uses_test_file_from_command(self):
+        import tempfile
+        from pathlib import Path
+        from devdeck import build_incident_payload
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            test_file = root / "tests" / "unit" / "test_receipts.py"
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text("import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(True)\n", encoding="utf-8")
+            stderr = (
+                "ERROR: unit (unittest.loader._FailedTest.unit)\n"
+                "----------------------------------------------------------------------\n"
+                "ImportError: Failed to import test module: unit\n"
+                'Traceback (most recent call last):\n'
+                '  File "C:\\Python\\Lib\\unittest\\loader.py", line 162, in loadTestsFromName\n'
+                "    module = __import__(module_name)\n"
+                "ModuleNotFoundError: No module named 'tests.unit'\n"
+            )
+            payload = build_incident_payload(
+                "python -m unittest tests/unit/test_receipts.py",
+                stderr,
+                root,
+            )
+            self.assertEqual("tests/unit/test_receipts.py", payload["error_file"])
+            self.assertFalse(payload.get("validation_error"))
+            self.assertGreaterEqual(payload.get("error_line") or 0, 1)
+
 
 class IsolatedSubprocessTimeoutTest(unittest.TestCase):
     def test_hung_process_fails_with_exit_124_within_timeout(self):

@@ -72,7 +72,60 @@ def detect_language(file_path: str | None) -> str:
     return mapping.get(ext, "auto")
 
 
-def get_error_metadata(stderr: str):
+def _is_stdlib_frame(path: str) -> bool:
+    norm = path.replace("\\", "/").lower()
+    return any(x in norm for x in [
+        "lib/unittest", "lib\\unittest", "site-packages", "importlib", "<frozen", "<string>",
+        "unittest/loader", "unittest/runner", "unittest/case", "unittest/suite",
+        "/lib/python", "\\lib\\python",
+    ])
+
+
+def _resolve_under_project(raw: str, project_root: Path | None) -> Path | None:
+    if not raw:
+        return None
+    cleaned = raw.strip().strip('"').replace("\\", "/")
+    candidates: list[Path] = [Path(raw), Path(cleaned)]
+    if project_root:
+        candidates.append(project_root / cleaned)
+        candidates.append(project_root / Path(raw).name)
+        if not cleaned.endswith(".py") and re.fullmatch(r"[A-Za-z_][\w.]*", cleaned):
+            dotted = cleaned.replace(".", "/") + ".py"
+            candidates.append(project_root / dotted)
+            candidates.append(project_root / "src" / dotted)
+            candidates.append(project_root / "tests" / dotted)
+    for cand in candidates:
+        try:
+            resolved = cand.resolve()
+        except OSError:
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def _source_from_command(command: str, project_root: Path | None) -> Path | None:
+    if not command:
+        return None
+    for token in re.findall(r"[^\s\"']+\.py", command):
+        found = _resolve_under_project(token, project_root)
+        if found:
+            return found
+    dotted = re.search(r"unittest\s+([A-Za-z_][\w.]*)", command)
+    if dotted:
+        found = _resolve_under_project(dotted.group(1), project_root)
+        if found:
+            return found
+    return None
+
+
+def is_cli_invocation_error(command: str) -> bool:
+    """True only when the watched command itself is a leftover `run` token."""
+    token = command.strip().split(None, 1)[0] if command.strip() else ""
+    return token.lower() == "run"
+
+
+def get_error_metadata(stderr: str, project_root: str | Path | None = None, command: str = ""):
     patterns = [
         r'File "(.*?)", line (\d+)',
         r'at (?:[^\(\n]+\()?([a-zA-Z0-9_\-\./\\]+\.(?:js|ts|jsx|tsx|mjs)):(\d+)',
@@ -82,16 +135,10 @@ def get_error_metadata(stderr: str):
         r'([a-zA-Z0-9_\-\./\\]+\.(?:py|js|ts|kt|java|cpp|c|rs|go|rb|php)):(\d+)',
     ]
 
-    found_file = None
-    found_line = None
+    root = Path(project_root).resolve() if project_root else Path.cwd()
+    found_path: Path | None = None
+    found_line: int | None = None
     lines = stderr.splitlines()
-
-    def is_stdlib_file(p: str) -> bool:
-        norm = p.replace("\\", "/").lower()
-        return any(x in norm for x in [
-            "lib/unittest", "site-packages", "importlib", "<frozen", "<string>",
-            "unittest/loader", "unittest/runner", "unittest/case", "unittest/suite"
-        ])
 
     for line in reversed(lines):
         for pattern in patterns:
@@ -101,46 +148,58 @@ def get_error_metadata(stderr: str):
                 if len(groups) >= 2:
                     candidate_file = groups[0]
                     candidate_line = next((int(g) for g in groups[1:] if g.isdigit()), None)
-                    if candidate_line is not None:
-                        if is_stdlib_file(candidate_file):
-                            continue
-                        found_file = candidate_file
+                    if candidate_line is None or _is_stdlib_frame(candidate_file):
+                        continue
+                    resolved = _resolve_under_project(candidate_file, root)
+                    if resolved:
+                        found_path = resolved
                         found_line = candidate_line
-                        if os.path.exists(found_file):
-                            break
-        if found_file and os.path.exists(found_file):
+                        break
+        if found_path:
             break
 
-    # Fallback: check for module path in ImportError / ModuleNotFoundError
-    if not found_file or not os.path.exists(found_file):
-        import_match = re.search(r"from ['\"]?([a-zA-Z0-9_\.]+)['\"]?", stderr) or re.search(r"module ['\"]?([a-zA-Z0-9_\.]+)['\"]?", stderr)
+    if found_path is None:
+        fail_mod = re.search(
+            r"(?:FAIL|ERROR):\s+\S+\s+\(([A-Za-z_][\w.]*)\)",
+            stderr,
+        )
+        if fail_mod:
+            found_path = _resolve_under_project(fail_mod.group(1), root)
+            found_line = found_line or 1
+
+    if found_path is None:
+        import_match = (
+            re.search(r"No module named ['\"]([A-Za-z_][\w.]*)['\"]", stderr)
+            or re.search(r"from ['\"]?([A-Za-z_][\w.]+)['\"]?", stderr)
+            or re.search(r"module ['\"]?([A-Za-z_][\w.]+)['\"]?", stderr)
+        )
         if import_match:
-            mod_path = import_match.group(1).replace(".", "/") + ".py"
-            for prefix in ["", "src/", "lib/"]:
-                candidate = prefix + mod_path
-                if os.path.exists(candidate):
-                    found_file = candidate
-                    found_line = 1
-                    break
+            found_path = _resolve_under_project(import_match.group(1), root)
+            found_line = found_line or 1
+
+    if found_path is None:
+        found_path = _source_from_command(command, root)
+        found_line = found_line or 1
 
     context = None
     original_line = None
-    if found_file and os.path.exists(found_file):
+    found_file = str(found_path) if found_path else None
+    if found_path and found_path.is_file() and found_line:
         try:
-            with open(found_file, 'r', encoding='utf-8', errors='replace') as f:
+            with open(found_path, "r", encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
-                if 1 <= found_line <= len(all_lines):
-                    original_line = all_lines[found_line - 1].strip()
+            if 1 <= found_line <= len(all_lines):
+                original_line = all_lines[found_line - 1].strip()
 
-                start = max(0, found_line - 6)
-                end = min(len(all_lines), found_line + 6)
-                context_lines = []
-                for idx in range(start, end):
-                    cur_line_num = idx + 1
-                    line_content = all_lines[idx]
-                    prefix = ">>> " if cur_line_num == found_line else "    "
-                    context_lines.append(f"{prefix}{cur_line_num:4d} | {line_content}")
-                context = "".join(context_lines)
+            start = max(0, found_line - 6)
+            end = min(len(all_lines), found_line + 6)
+            context_lines = []
+            for idx in range(start, end):
+                cur_line_num = idx + 1
+                line_content = all_lines[idx]
+                prefix = ">>> " if cur_line_num == found_line else "    "
+                context_lines.append(f"{prefix}{cur_line_num:4d} | {line_content}")
+            context = "".join(context_lines)
         except Exception as e:
             print(f"[DevDeck] Error reading source file: {e}")
 
@@ -165,8 +224,10 @@ def get_brain(project_root: str | Path) -> tuple[ProjectBrain, bool]:
 
 
 def build_incident_payload(command: str, stderr: str, project_root: str | Path | None = None) -> dict:
-    source_context, file_path, line_num, original_line = get_error_metadata(stderr)
     project = canonical_project_root(project_root or Path.cwd())
+    source_context, file_path, line_num, original_line = get_error_metadata(
+        stderr, project.path, command
+    )
     source_path = None
     if file_path:
         cand_p = (project.path / file_path).resolve()
@@ -254,11 +315,40 @@ def parse_run_command(args: list[str]) -> str:
     return " ".join(cleaned).strip()
 
 
+_UNITTEST_PY_PATH = re.compile(
+    r"(?P<pre>(?:python(?:\d+(?:\.\d+)*)?|py)\s+-m\s+unittest\s+)(?P<path>[^\s]+?\.py)(?!\S)",
+    re.IGNORECASE,
+)
+
+
+def normalize_watched_command(command: str, cwd: str | Path | None = None) -> str:
+    """Load ``python -m unittest path/to/test.py`` via discover so Windows does not import ``tests.unit``."""
+    if re.search(r"-m\s+unittest\s+discover\b", command, re.IGNORECASE):
+        return command
+    match = _UNITTEST_PY_PATH.search(command)
+    if not match:
+        return command
+    root = Path(cwd or Path.cwd()).resolve()
+    raw = match.group("path").strip("\"'")
+    path = Path(raw)
+    if not path.is_file():
+        path = root / raw
+    if not path.is_file():
+        return command
+    try:
+        start = path.parent.resolve().relative_to(root).as_posix() or "."
+    except ValueError:
+        start = str(path.parent)
+    rewritten = f'{match.group("pre")}discover -s "{start}" -p "{path.name}"'
+    return command[: match.start()] + rewritten + command[match.end() :]
+
+
 def run_command_with_watch(command: str) -> int:
     root = Path.cwd()
     memory = RepairMemory(root)
     policy = memory.get_policy()
 
+    command = normalize_watched_command(command, root)
     print(f"\n[DevDeck Active Watch] Executing: {command} (Autonomy Policy: {policy.level.value})")
     print("=" * 65)
     env = os.environ.copy()
@@ -269,39 +359,50 @@ def run_command_with_watch(command: str) -> int:
         py_paths.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(py_paths)
 
+    env["PYTHONUNBUFFERED"] = "1"
+
     process = subprocess.Popen(
         command,
         shell=True,
-        stdout=sys.stdout,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         text=True,
-        env=env
+        env=env,
+        bufsize=1,
     )
 
-    _, stderr = process.communicate()
+    captured: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        captured.append(line)
+    process.wait()
+    combined_output = "".join(captured)
 
     if process.returncode != 0:
         print("=" * 65)
         print(f"❌ [DevDeck] Command failed (Exit Code: {process.returncode}). Analyzing incident...")
-        payload = build_incident_payload(command, stderr, root)
+        payload = build_incident_payload(command, combined_output, root)
 
         print(f"\n● Failure captured")
         file_label = payload.get("error_file") or "unknown"
         line_label = payload.get("error_line") if payload.get("error_line") is not None else "unknown"
         print(f"  {command} failed at {file_label}:{line_label}")
 
-        unlocated = not payload.get("error_file") or payload.get("error_line") is None
-        if unlocated:
+        if is_cli_invocation_error(command):
             payload["error_file"] = payload.get("error_file") or "unknown"
             payload["error_line"] = payload.get("error_line") or 0
             payload["validation_error"] = True
             payload["validation_message"] = (
-                "No source file/line could be parsed from this failure. "
-                "If you typed `devdeck.py run run <cmd>`, drop the extra `run` keyword "
-                "(example: python devdeck.py run python -m unittest)."
+                "The watched command started with an extra `run` keyword. "
+                "Use: python devdeck.py run python -m unittest tests/unit/test_receipts.py"
             )
             print(f"  {payload['validation_message']}")
+        elif not payload.get("error_file"):
+            payload["error_file"] = "unknown"
+            payload["error_line"] = payload.get("error_line") or 0
 
         receipt = payload.get("context_receipt")
         if receipt:

@@ -163,6 +163,12 @@ async def relay(websocket):
                     repair_code = data.get("code")
                     diff_text = data.get("diff_text")
                     cmd_to_rerun = incident_data.get("command") if incident_data else None
+                    if cmd_to_rerun:
+                        from devdeck import normalize_watched_command
+                        cmd_to_rerun = normalize_watched_command(
+                            cmd_to_rerun,
+                            incident_data.get("project_root", str(Path.cwd())),
+                        )
                     allowed_symbols = set(incident_data.get("allowed_symbols", [])) if incident_data else set()
                     expected_sha256 = data.get("expected_sha256")
 

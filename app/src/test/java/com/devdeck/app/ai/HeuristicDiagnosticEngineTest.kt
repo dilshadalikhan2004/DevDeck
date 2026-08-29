@@ -23,4 +23,19 @@ class HeuristicDiagnosticEngineTest {
         assertEquals(PatchType.SINGLE_LINE, result.patchType)
         assertTrue(result.rootCause.contains("Attribute access on None"))
     }
+
+    @Test
+    fun `does not invent a single line patch for unittest package import errors`() {
+        val result = HeuristicDiagnosticEngine.diagnose(
+            trace = "ModuleNotFoundError: No module named 'tests.unit'\nFailed to import test module: unit",
+            source = "import unittest",
+            fPath = "tests/unit/test_receipts.py",
+            lNum = 1,
+            origLine = "import unittest"
+        )
+
+        assertEquals(null, result.repairCode)
+        assertTrue(result.abstained)
+        assertTrue(result.fix.contains("discover") || result.rootCause.contains("package"))
+    }
 }
