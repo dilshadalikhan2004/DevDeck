@@ -71,10 +71,27 @@ class MainActivity : ComponentActivity() {
             val savedDevice = securePrefs.getString("paired_device_name", "Developer Machine") ?: "Developer Machine"
             val deviceLabel = if (connected) savedDevice else "Not Connected"
             viewModel.updateStatus(agent.isEngineReady(), connected, deviceLabel)
-            viewModel.addLog(
-                if (connected) "[Relay] Connected to bridge ($savedDevice)"
-                else "[Relay] Bridge disconnected — Retrying..."
-            )
+            
+            val logMsg = if (connected) "[Relay] Connected to bridge ($savedDevice)"
+                        else "[Relay] Bridge disconnected — Connection disrupted"
+            viewModel.addLog(logMsg)
+
+            if (!connected) {
+                // Guardian: Fail any active pipeline if the connection is lost during execution
+                viewModel.uiState.value.activeIncidentId?.let { id ->
+                    val pipeline = viewModel.uiState.value.pipelines.byId[id]
+                    if (pipeline != null && pipeline.outcome == com.devdeck.app.pipeline.PipelineOutcome.IN_PROGRESS) {
+                        viewModel.applyPipelineEvent(
+                            PipelineEvent(
+                                incidentId = id,
+                                stage = viewModel.uiState.value.selectedStage ?: PipelineStage.SANDBOX_DRY_RUN,
+                                phase = EventPhase.FAILED,
+                                message = "Bridge connection lost during pipeline execution"
+                            )
+                        )
+                    }
+                }
+            }
         }
 
         override fun onMessageReceived(text: String) {

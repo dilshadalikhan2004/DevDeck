@@ -469,6 +469,22 @@ async def main():
     except Exception:
         pass
 
+    def free_port(p: int):
+        if sys.platform == "win32":
+            try:
+                out = subprocess.check_output(f"netstat -ano -p tcp | findstr :{p}", shell=True, text=True, stderr=subprocess.DEVNULL)
+                for line in out.strip().splitlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 5 and "LISTENING" in parts:
+                        pid = int(parts[-1])
+                        if pid != os.getpid():
+                            os.kill(pid, 9)
+            except Exception:
+                pass
+
+    free_port(port)
+    free_port(http_port)
+
     pairing_data = {
         "url": f"ws://{primary_ip}:{port}",
         "secret": PAIRING_SECRET,
