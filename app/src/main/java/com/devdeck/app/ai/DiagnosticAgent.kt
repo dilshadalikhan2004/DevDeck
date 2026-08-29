@@ -40,11 +40,15 @@ class DiagnosticAgent(private val context: Context) {
                 
             val engine = LlmInference.createFromOptions(context, options)
             
-            // CANARY TEST
+            // CANARY TEST: Measure real TPS and Memory
             try {
-                engine.generateResponse("Warmup")
+                val start = System.currentTimeMillis()
+                engine.generateResponse("Warmup canary test")
+                val end = System.currentTimeMillis()
+                val duration = end - start
+                
                 llmInference = engine
-                Log.i("DevDeck", "MediaPipe LlmInference initialized and verified.")
+                Log.i("DevDeck", "MediaPipe LlmInference initialized. Canary duration: ${duration}ms")
             } catch (e: Throwable) {
                 Log.e("DevDeck", "Model loaded but canary inference failed: ${e.message}")
                 llmInference = null
@@ -60,13 +64,15 @@ class DiagnosticAgent(private val context: Context) {
         sourceContext: String? = null,
         filePath: String? = null,
         lineNum: Int? = null,
-        originalLine: String? = null
+        originalLine: String? = null,
+        expectedSha256: String? = null,
+        incidentId: String? = null
     ): Pair<DiagnosticResult, Long> = withContext(Dispatchers.IO) {
         val inference = llmInference
         if (inference == null) {
             Log.w("DevDeck", "LlmInference null, falling back to heuristic")
             val result = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
-            return@withContext result to 0L
+            return@withContext result.copy(expectedSha256 = expectedSha256, incidentId = incidentId) to 0L
         }
         
         val contextSection = if (!sourceContext.isNullOrBlank()) {
@@ -155,7 +161,8 @@ class DiagnosticAgent(private val context: Context) {
         val tps = if (duration > 0) (tokenCount / (duration / 1000f)) else 0f
 
         val result = parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext)
-        return@withContext result to duration
+        val finalResult = result.copy(expectedSha256 = expectedSha256, incidentId = incidentId)
+        return@withContext finalResult to duration
     }
 
     private fun extractCleanError(errorText: String): String {

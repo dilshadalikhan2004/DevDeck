@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -120,6 +121,10 @@ class MainActivity : AppCompatActivity() {
             vibrate()
             showHistory() 
         }
+        binding.permissionButton.setOnClickListener {
+            vibrate()
+            showPermissionDialog()
+        }
         binding.scanButton.setOnClickListener { 
             vibrate()
             cameraLauncher.launch(Intent(this, CameraActivity::class.java))
@@ -158,6 +163,21 @@ class MainActivity : AppCompatActivity() {
             .setNeutralButton("Clear all") { _, _ ->
                 manager.clear()
                 Toast.makeText(this, "Project context cleared", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun showPermissionDialog() {
+        val prefs = getSharedPreferences("devdeck", MODE_PRIVATE)
+        val modes = arrayOf("Ask every time", "Allow for session", "Always allow for project")
+        val currentMode = prefs.getInt("repair_permission_mode", 0)
+
+        AlertDialog.Builder(this)
+            .setTitle("Repair Permissions")
+            .setSingleChoiceItems(modes, currentMode) { dialog, which ->
+                prefs.edit().putInt("repair_permission_mode", which).apply()
+                Toast.makeText(this, "Mode set to: ${modes[which]}", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
             }
             .show()
     }
@@ -215,6 +235,9 @@ class MainActivity : AppCompatActivity() {
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 runOnUiThread {
+                    val secret = getSharedPreferences("devdeck", MODE_PRIVATE).getString("pairing_secret", "DECK-POCKET-SAFE")
+                    webSocket.send(JSONObject().put("type", "pair").put("secret", secret).toString())
+                    
                     updateRelayStatus("CONNECTED", true)
                     binding.liveTag.visibility = View.VISIBLE
                     appendToTerminal("[Bridge] Connected to $relay", "ok")
@@ -346,6 +369,8 @@ class MainActivity : AppCompatActivity() {
             val errorFile = json.optString("error_file", "unknown_file")
             val errorLine = if (json.has("error_line")) json.getInt("error_line") else -1
             val originalLine = json.optString("original_line", "unknown line")
+            val incidentId = json.optString("incident_id")
+            val expectedSha = json.optString("expected_sha256")
 
             // Update Home Screen Card
             val title = try {
@@ -368,7 +393,7 @@ class MainActivity : AppCompatActivity() {
             } else "No source context available."
 
             // Update Diagnosis Screen
-            appendToTerminal("Updating UI for incident...", "sys")
+            appendToTerminal("Updating UI for incident $incidentId...", "sys")
             binding.diagTargetFile.text = errorFile.split('\\').last().split('/').last()
             binding.diagnosisCard.visibility = View.VISIBLE
             
@@ -395,7 +420,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             lifecycleScope.launch {
-                val (result, duration) = agent.analyzeError(errorTrace, sourceContext, errorFile, errorLine, originalLine)
+                val (result, duration) = agent.analyzeError(
+                    errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId
+                )
                 
                 // PRINT FULL AI OUTPUT TO CONSOLE
                 appendToTerminal("Agent: Targeting line: '$originalLine'", "agent")
@@ -470,12 +497,16 @@ class MainActivity : AppCompatActivity() {
                 put("file", result.repairFile)
                 put("line", result.repairLine)
                 put("code", result.repairCode)
+                put("expected_sha256", result.expectedSha256)
+                put("incident_id", result.incidentId)
             }
             com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
                 put("type", "repair")
                 put("patch_type", "diff")
                 put("file", result.repairFile)
                 put("diff_text", result.diffText)
+                put("expected_sha256", result.expectedSha256)
+                put("incident_id", result.incidentId)
             }
         }
         appendToTerminal("Sending ${result.patchType} repair to laptop...", "sys")
@@ -515,17 +546,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSetup() {
         val prefs = getSharedPreferences("devdeck", MODE_PRIVATE)
-        val input = EditText(this).apply {
-            hint = "ws://192.168.x.x:8765"
-            setText(prefs.getString("relay_url", "ws://localhost:8765"))
-            setSelectAllOnFocus(false)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 40, 60, 10)
         }
+        val urlInput = EditText(this).apply {
+            hint = "Relay URL (ws://192.168.x.x:8765)"
+            setText(prefs.getString("relay_url", "ws://localhost:8765"))
+        }
+        val secretInput = EditText(this).apply {
+            hint = "Pairing Secret"
+            setText(prefs.getString("pairing_secret", "DECK-POCKET-SAFE"))
+        }
+        layout.addView(urlInput)
+        layout.addView(secretInput)
+
         AlertDialog.Builder(this)
             .setTitle("Laptop pairing")
-            .setMessage("Use ws://localhost:8765 with adb reverse, or enter your laptop's local-network address.")
-            .setView(input)
+            .setMessage("Enter the Relay URL and Pairing Secret from your desktop bridge.")
+            .setView(layout)
             .setPositiveButton("Save & connect") { _, _ ->
-                prefs.edit().putString("relay_url", input.text.toString().trim()).apply()
+                prefs.edit()
+                    .putString("relay_url", urlInput.text.toString().trim())
+                    .putString("pairing_secret", secretInput.text.toString().trim())
+                    .apply()
                 connectToRelay()
             }
             .setNegativeButton("Cancel", null).show()

@@ -1,13 +1,16 @@
 import os
 import subprocess
 import tempfile
+import shutil
+import hashlib
+import re
 from pathlib import Path
-from git_transaction_engine import GitTransactionEngine, FallbackBackupManager
+from datetime import datetime
 
 class PatchManager:
-    def __init__(self):
-        self.git_engine = GitTransactionEngine()
-        self.fallback_backup = FallbackBackupManager()
+    def __init__(self, backup_dir=".devdeck/snapshots"):
+        self.backup_dir = Path(backup_dir)
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
 
     def apply_repair(self, data, last_command):
         patch_type = data.get("patch_type", "single_line")
@@ -30,25 +33,27 @@ class PatchManager:
     def apply_single_line_repair(self, data, last_command, file_path):
         line_num = data.get("line")
         new_code = data.get("code", "")
+        expected_sha = data.get("expected_sha256")
 
         if not line_num or not new_code:
             return False, "Invalid single-line payload", file_path, None
 
-        if "\n" in new_code.strip() or "\r" in new_code.strip():
-            return False, "Multi-line fix in single-line mode rejected", file_path, None
+        # 1. Integrity Check (SHA256)
+        if expected_sha:
+            current_sha = self._calculate_sha256(file_path)
+            if current_sha != expected_sha:
+                return False, f"Integrity check failed: file changed since diagnosis.", file_path, None
 
-        if self.git_engine.is_git_repo():
-            transaction_id = self.git_engine.create_transaction(file_path)
-        else:
-            transaction_id = self.fallback_backup.create_backup(file_path)
+        # 2. Create Snapshot
+        snapshot_id = self._create_snapshot(file_path)
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
 
             if not (1 <= line_num <= len(lines)):
-                self._rollback(file_path, transaction_id)
-                return False, f"Line {line_num} out of range", file_path, transaction_id
+                self._restore_snapshot(file_path, snapshot_id)
+                return False, f"Line {line_num} out of range", file_path, snapshot_id
 
             old_line = lines[line_num - 1]
             indent = old_line[:len(old_line) - len(old_line.lstrip())]
@@ -57,86 +62,127 @@ class PatchManager:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
 
+            # 3. Verify with Rerun
             if last_command:
                 if not self.rerun_command(last_command):
-                    self._rollback(file_path, transaction_id)
-                    return False, "Rerun failed", file_path, transaction_id
+                    self._restore_snapshot(file_path, snapshot_id)
+                    return False, "Rerun failed. Restored snapshot.", file_path, snapshot_id
 
-            self._commit(transaction_id)
-            return True, None, file_path, transaction_id
+            return True, None, file_path, snapshot_id
         except Exception as e:
-            self._rollback(file_path, transaction_id)
-            return False, str(e), file_path, transaction_id
+            self._restore_snapshot(file_path, snapshot_id)
+            return False, str(e), file_path, snapshot_id
 
     def apply_diff_patch(self, data, last_command, file_path):
         diff_text = data.get("diff_text")
+        expected_sha = data.get("expected_sha256")
+
         if not diff_text:
             return False, "No diff_text", file_path, None
 
-        if self.git_engine.is_git_repo():
-            transaction_id = self.git_engine.create_transaction(file_path)
-        else:
-            transaction_id = self.fallback_backup.create_backup(file_path)
+        # 1. Integrity Check
+        if expected_sha:
+            current_sha = self._calculate_sha256(file_path)
+            if current_sha != expected_sha:
+                return False, f"Integrity check failed: file changed since diagnosis.", file_path, None
+
+        # 2. Create Snapshot
+        snapshot_id = self._create_snapshot(file_path)
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 original = f.read()
 
-            patched = self._apply_diff_to_string(original, diff_text)
+            patched = self._apply_unified_diff(original, diff_text)
             if patched is None:
-                self._rollback(file_path, transaction_id)
-                return False, "Diff application failed", file_path, transaction_id
+                self._restore_snapshot(file_path, snapshot_id)
+                return False, "Built-in diff application failed", file_path, snapshot_id
 
             ok, err = self.dry_run_compile_check(file_path, patched)
             if not ok:
-                self._rollback(file_path, transaction_id)
-                return False, f"Syntax check failed: {err}", file_path, transaction_id
+                self._restore_snapshot(file_path, snapshot_id)
+                return False, f"Syntax check failed: {err}", file_path, snapshot_id
 
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(patched)
 
             if last_command:
                 if not self.rerun_command(last_command):
-                    self._rollback(file_path, transaction_id)
-                    return False, "Rerun failed after patch", file_path, transaction_id
+                    self._restore_snapshot(file_path, snapshot_id)
+                    return False, "Rerun failed after patch. Restored snapshot.", file_path, snapshot_id
 
-            self._commit(transaction_id)
-            return True, None, file_path, transaction_id
+            return True, None, file_path, snapshot_id
         except Exception as e:
-            self._rollback(file_path, transaction_id)
-            return False, str(e), file_path, transaction_id
+            self._restore_snapshot(file_path, snapshot_id)
+            return False, str(e), file_path, snapshot_id
 
-    def _apply_diff_to_string(self, original: str, diff_text: str):
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.tmp', delete=False, encoding='utf-8') as tmp:
-            tmp.write(original)
-            tmp_path = tmp.name
+    def _calculate_sha256(self, file_path):
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.patch', delete=False, encoding='utf-8') as pf:
-            patch_content = f"--- a/temp\n+++ b/temp\n{diff_text}\n"
-            pf.write(patch_content)
-            patch_path = pf.name
+    def _create_snapshot(self, file_path):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        file_name = Path(file_path).name
+        snapshot_path = self.backup_dir / f"{file_name}.{timestamp}.bak"
+        shutil.copy2(file_path, snapshot_path)
+        print(f"[Snapshot] Created: {snapshot_path}")
+        return str(snapshot_path)
 
-        try:
-            result = subprocess.run(
-                ['patch', tmp_path, patch_path],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode != 0:
-                print(f"[PatchManager] patch command failed: {result.stderr}")
-                return None
+    def _restore_snapshot(self, file_path, snapshot_path):
+        if snapshot_path and os.path.exists(snapshot_path):
+            shutil.copy2(snapshot_path, file_path)
+            print(f"[Snapshot] Restored {file_path} from {snapshot_path}")
+        else:
+            print(f"[Snapshot] Warning: No snapshot found to restore {file_path}")
 
-            with open(tmp_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            print(f"[PatchManager] Error applying diff: {e}")
-            return None
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            if os.path.exists(patch_path):
-                os.unlink(patch_path)
+    def _apply_unified_diff(self, original: str, diff_text: str):
+        """Pure Python unified diff applier for Windows compatibility"""
+        lines = original.splitlines(keepends=True)
+        diff_lines = diff_text.splitlines()
+
+        result = []
+        i = 0 # original lines index
+        j = 0 # diff lines index
+
+        while j < len(diff_lines):
+            line = diff_lines[j]
+            if line.startswith('@@'):
+                match = re.match(r'@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@', line)
+                if not match:
+                    j += 1
+                    continue
+
+                old_start = int(match.group(1))
+                target_idx = old_start - 1
+
+                while i < target_idx:
+                    result.append(lines[i])
+                    i += 1
+
+                j += 1
+                while j < len(diff_lines) and not diff_lines[j].startswith('@@'):
+                    dl = diff_lines[j]
+                    if dl.startswith(' '):
+                        if i < len(lines):
+                            result.append(lines[i])
+                            i += 1
+                    elif dl.startswith('-'):
+                        if i < len(lines):
+                            i += 1
+                    elif dl.startswith('+'):
+                        result.append(dl[1:] + '\n')
+                    j += 1
+            else:
+                j += 1
+
+        while i < len(lines):
+            result.append(lines[i])
+            i += 1
+
+        return "".join(result)
 
     def dry_run_compile_check(self, file_path: str, content: str):
         ext = os.path.splitext(file_path)[1].lower()
@@ -169,7 +215,7 @@ class PatchManager:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=8
+                timeout=12
             )
             success = result.returncode == 0
             print(f"[PatchManager] Rerun {'SUCCESS' if success else 'FAILED'}")
@@ -180,15 +226,3 @@ class PatchManager:
         except Exception as e:
             print(f"[PatchManager] Rerun error: {e}")
             return False
-
-    def _commit(self, transaction_id):
-        if self.git_engine.is_git_repo():
-            self.git_engine.commit_transaction(transaction_id)
-        else:
-            self.fallback_backup.commit(transaction_id)
-
-    def _rollback(self, file_path, transaction_id):
-        if self.git_engine.is_git_repo():
-            self.git_engine.rollback_transaction(file_path, transaction_id)
-        else:
-            self.fallback_backup.rollback(file_path, transaction_id)

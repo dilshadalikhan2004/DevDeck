@@ -8,9 +8,13 @@ from datetime import datetime
 from patch_manager import PatchManager
 
 connected_clients = set()
-last_command = None
+authenticated_clients = set()
+incidents = {}  # incident_id -> data
 incident_history = []
 patch_manager = PatchManager()
+
+# Pairing Secret (could be randomized or fixed for MVP)
+PAIRING_SECRET = "DECK-POCKET-SAFE"
 
 async def broadcast(message_dict, exclude=None):
     if not connected_clients:
@@ -26,25 +30,45 @@ async def broadcast(message_dict, exclude=None):
     connected_clients.difference_update(dead_clients)
 
 async def relay(websocket):
-    global last_command
     addr = websocket.remote_address
     connected_clients.add(websocket)
     print(f"[Relay] Connected: {addr}. Total clients: {len(connected_clients)}")
 
     try:
         async for message in websocket:
-            print(f"\n[Relay] Data received from {addr}: {message[:120]}...")
-
             try:
                 data = json.loads(message)
 
-                # Check for repair payload from Phone / Web
+                # 1. Pairing / Authentication
+                if data.get("type") == "pair":
+                    secret = data.get("secret")
+                    if secret == PAIRING_SECRET:
+                        authenticated_clients.add(websocket)
+                        print(f"✅ [Relay] Client {addr} authenticated successfully.")
+                        await websocket.send(json.dumps({"type": "pair_result", "success": True}))
+                    else:
+                        print(f"❌ [Relay] Client {addr} failed authentication.")
+                        await websocket.send(json.dumps({"type": "pair_result", "success": False, "error": "Invalid secret"}))
+                    continue
+
+                # 2. Repair (Requires Auth)
                 if data.get("type") == "repair":
+                    if websocket not in authenticated_clients:
+                        print(f"🚫 [Relay] Rejected unauthorized repair from {addr}")
+                        await websocket.send(json.dumps({"type": "error", "message": "Unauthorized. Please pair first."}))
+                        continue
+
+                    incident_id = data.get("incident_id")
+                    incident_data = incidents.get(incident_id) if incident_id else None
+
                     target_file = data.get("file", "")
                     patch_type = data.get("patch_type", "single_line")
-                    print(f"🛠️  [Relay] REPAIR ({patch_type}): {target_file}")
+                    print(f"🛠️  [Relay] REPAIR ({patch_type}) for Incident {incident_id}: {target_file}")
 
-                    success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, last_command)
+                    # Use command from incident if available
+                    cmd_to_rerun = incident_data.get("command") if incident_data else None
+
+                    success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, cmd_to_rerun)
 
                     if not success:
                         await broadcast({
@@ -59,18 +83,20 @@ async def relay(websocket):
                     })
                     continue
 
-                # Store command from devdeck.py
-                if "command" in data:
-                    last_command = data["command"]
-                    print(f"[Relay] Monitoring Command: {last_command}")
+                # 3. Incident Capture (from devdeck.py)
+                if "command" in data and "error_text" in data:
+                    # Generate an incident ID if not present
+                    incident_id = data.get("incident_id", f"inc_{int(datetime.now().timestamp())}")
+                    data["incident_id"] = incident_id
+                    incidents[incident_id] = data
 
-                # Maintain history for web dashboard
-                if "error_text" in data:
+                    print(f"[Relay] Captured Incident {incident_id} for command: {data['command']}")
+
                     incident_history.append(data)
                     if len(incident_history) > 30:
                         incident_history.pop(0)
 
-                # Broadcast error / trace payloads to all other paired devices
+                # Broadcast to all other devices
                 await broadcast(data, exclude=websocket)
 
             except Exception as e:
@@ -80,6 +106,7 @@ async def relay(websocket):
         pass
     finally:
         connected_clients.discard(websocket)
+        authenticated_clients.discard(websocket)
         print(f"[Relay] Disconnected: {addr}. Remaining clients: {len(connected_clients)}")
 
 def apply_repair_robust(data):

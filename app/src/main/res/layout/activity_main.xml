@@ -229,12 +229,12 @@
                         app:strokeWidth="1dp"
                         app:cornerRadius="12dp" />
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/historyButton"
+                        android:id="@+id/permissionButton"
                         android:layout_width="0dp"
                         android:layout_height="48dp"
                         android:layout_marginStart="5dp"
                         android:layout_weight="1"
-                        android:text="Local history"
+                        android:text="Permissions"
                         android:textAllCaps="false"
                         android:textColor="@color/color_ink"
                         style="@style/TextAppearance.DevDeck.Body"
@@ -243,6 +243,20 @@
                         app:strokeWidth="1dp"
                         app:cornerRadius="12dp" />
                 </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/historyButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="8dp"
+                    android:text="Private debug history"
+                    android:textAllCaps="false"
+                    android:textColor="@color/color_ink"
+                    style="@style/TextAppearance.DevDeck.Body"
+                    app:backgroundTint="@color/color_surface"
+                    app:strokeColor="@color/color_border"
+                    app:strokeWidth="1dp"
+                    app:cornerRadius="12dp" />
 
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"

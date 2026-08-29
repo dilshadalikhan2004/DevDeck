@@ -6,6 +6,7 @@ import websockets
 from datetime import datetime
 import re
 import os
+import hashlib
 
 async def send_error(error_data):
     uri = os.environ.get("DEVDECK_RELAY_URI", "ws://localhost:8765")
@@ -15,6 +16,15 @@ async def send_error(error_data):
             print(f"\n[DevDeck] -> Error incident + source context dispatched to paired device ({uri}).")
     except Exception as e:
         print(f"\n[DevDeck] Warning: Could not connect to relay server ({uri}): {e}")
+
+def calculate_sha256(file_path):
+    if not file_path or not os.path.exists(file_path):
+        return None
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
 def detect_language(file_path):
     if not file_path:
@@ -126,8 +136,12 @@ def run_command(command):
         source_context, file_path, line_num, original_line = get_error_metadata(stderr)
 
         lang = detect_language(file_path)
+        incident_id = f"inc_{int(datetime.now().timestamp())}"
+        sha256 = calculate_sha256(file_path)
 
         error_payload = {
+            "type": "incident",
+            "incident_id": incident_id,
             "timestamp": datetime.now().isoformat(),
             "command": command,
             "error_text": cleaned_error,
@@ -135,10 +149,12 @@ def run_command(command):
             "error_file": os.path.abspath(file_path) if file_path and os.path.exists(file_path) else file_path,
             "error_line": line_num,
             "original_line": original_line,
-            "language": lang
+            "language": lang,
+            "expected_sha256": sha256
         }
 
         print(f"📍 Target: {file_path}:{line_num} [{lang}]")
+        print(f"🆔 Incident ID: {incident_id}")
         if original_line:
             print(f"🔍 Line Content: {original_line}")
 
