@@ -4,10 +4,20 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Build
+import android.content.ServiceConnection
+import android.content.ComponentName
+import android.os.IBinder
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
+import android.util.Log
+import android.net.Uri
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import com.devdeck.app.service.RelayService
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -25,11 +35,56 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val agent by lazy { DiagnosticAgent(this) }
-    private val client = OkHttpClient()
-    private var webSocket: WebSocket? = null
+    private var relayService: RelayService? = null
     private val history by lazy { DiagnosticHistory(this) }
 
-    private val cameraLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+    private val securePrefs by lazy {
+        val masterKey = MasterKey.Builder(this)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            this,
+            "devdeck_secure",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    private val relayListener = object : RelayService.RelayListener {
+        override fun onConnectionStateChanged(connected: Boolean) {
+            updateRelayStatus(if (connected) "CONNECTED" else "RECONNECTING...", connected)
+            binding.liveTag.visibility = if (connected) View.VISIBLE else View.GONE
+        }
+
+        override fun onMessageReceived(text: String) {
+            dispatchMessage(text)
+        }
+    }
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as RelayService.LocalBinder
+            relayService = binder.getService()
+            relayService?.addListener(relayListener)
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            relayService?.removeListener(relayListener)
+            relayService = null
+        }
+    }
+
+    private val qrLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val qrData = result.data?.getStringExtra("qr_data")
+            if (!qrData.isNullOrEmpty()) {
+                handlePairingData(qrData)
+            }
+        }
+    }
+
+    private val cameraLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
             val scannedText = result.data?.getStringExtra("scanned_text")
             if (!scannedText.isNullOrBlank()) {
@@ -44,7 +99,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         initAgent()
-        connectToRelay()
+        startRelayService()
         setupNavigation()
         setupActionButtons()
         
@@ -216,73 +271,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private var reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var reconnectRunnable: Runnable? = null
-
-    private fun connectToRelay() {
-        cancelReconnect()
-        webSocket?.cancel()
-        
-        // Keep screen active while app is paired for Desk Standby Mode
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        val relay = getSharedPreferences("devdeck", MODE_PRIVATE)
-            .getString("relay_url", "ws://localhost:8765")!!
-        val request = try { Request.Builder().url(relay).build() } catch (_: Exception) {
-            updateRelayStatus("INVALID URL", false)
-            return
+    private fun startRelayService() {
+        val intent = Intent(this, RelayService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
-        val listener = object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                runOnUiThread {
-                    val secret = getSharedPreferences("devdeck", MODE_PRIVATE).getString("pairing_secret", "DECK-POCKET-SAFE")
-                    webSocket.send(JSONObject().put("type", "pair").put("secret", secret).toString())
-                    
-                    updateRelayStatus("CONNECTED", true)
-                    binding.liveTag.visibility = View.VISIBLE
-                    appendToTerminal("[Bridge] Connected to $relay", "ok")
-                }
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                runOnUiThread {
-                    dispatchMessage(text)
-                }
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                runOnUiThread {
-                    updateRelayStatus("DISCONNECTED", false)
-                    binding.liveTag.visibility = View.GONE
-                    scheduleAutoReconnect()
-                }
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                runOnUiThread {
-                    updateRelayStatus("RETRYING...", false)
-                    binding.liveTag.visibility = View.GONE
-                    appendToTerminal("[Socket] Disconnected: ${t.message ?: "Connection lost"}", "fail")
-                    scheduleAutoReconnect()
-                }
-            }
-        }
-        webSocket = client.newWebSocket(request, listener)
+        bindService(intent, serviceConnection, BIND_AUTO_CREATE)
     }
 
-    private fun scheduleAutoReconnect() {
-        cancelReconnect()
-        reconnectRunnable = Runnable {
-            appendToTerminal("[Bridge] Attempting auto-reconnect to relay...", "sys")
-            connectToRelay()
+    private fun handlePairingData(qrData: String) {
+        try {
+            val uri = Uri.parse(qrData)
+            val url = uri.getQueryParameter("url")
+            val secret = uri.getQueryParameter("secret")
+
+            if (!url.isNullOrEmpty() && !secret.isNullOrEmpty()) {
+                securePrefs.edit()
+                    .putString("relay_url", url)
+                    .putString("pairing_secret", secret)
+                    .apply()
+                
+                appendToTerminal("[Bridge] Paired with $url. Reconnecting...", "ok")
+                stopService(Intent(this, RelayService::class.java))
+                startRelayService()
+            } else {
+                Toast.makeText(this, "Invalid QR Data", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Pairing failed: ${e.message}", Toast.LENGTH_SHORT).show()
         }
-        reconnectHandler.postDelayed(reconnectRunnable!!, 3000)
     }
 
-    private fun cancelReconnect() {
-        reconnectRunnable?.let { reconnectHandler.removeCallbacks(it) }
-        reconnectRunnable = null
-    }
 
     private fun updateRelayStatus(status: String, ok: Boolean) {
         binding.relayStatus.text = "RELAY: $status"
@@ -296,19 +317,47 @@ class MainActivity : AppCompatActivity() {
     private fun dispatchMessage(jsonText: String) {
         try {
             val json = JSONObject(jsonText)
-            val type = json.optString("type", "error")
-            if (type == "log_stream") {
-                val log = json.optString("log_line", "")
-                val logType = when {
-                    "SUCCESS" in log -> "ok"
-                    "FAILED" in log -> "fail"
-                    "Agent" in log -> "agent"
-                    else -> "sys"
+            val type = json.optString("type", "unknown")
+            when (type) {
+                "log_stream" -> {
+                    val log = json.optString("log_line", "")
+                    val logType = when {
+                        "SUCCESS" in log -> "ok"
+                        "FAILED" in log -> "fail"
+                        "Agent" in log -> "agent"
+                        else -> "sys"
+                    }
+                    appendToTerminal(log, logType)
+                    handleLogStream(log)
                 }
-                appendToTerminal(log, logType)
-                handleLogStream(log)
-            } else {
-                handleIncomingError(jsonText)
+                "pair_result" -> {
+                    val success = json.optBoolean("success", false)
+                    if (success) {
+                        appendToTerminal("[Bridge] Auth verified. Authority granted.", "ok")
+                        // Send a heartbeat to verify bi-directional traffic
+                        relayService?.sendMessage(JSONObject().put("type", "ping").put("timestamp", System.currentTimeMillis()).toString())
+                    } else {
+                        appendToTerminal("[Bridge] Auth failed: ${json.optString("error")}", "fail")
+                    }
+                }
+                "pong" -> {
+                    Log.d("DevDeck", "Heartbeat received from bridge")
+                }
+                "incident" -> {
+                    appendToTerminal("[System] Incoming incident detected. Analyzing...", "sys")
+                    handleIncomingError(jsonText)
+                }
+                "error" -> {
+                    appendToTerminal("[Bridge Error] ${json.optString("message")}", "fail")
+                }
+                else -> {
+                    // Fallback for older devdeck.py versions or generic messages
+                    if (json.has("error_text")) {
+                        handleIncomingError(jsonText)
+                    } else {
+                        Log.d("DevDeck", "Unknown message type: $type")
+                    }
+                }
             }
         } catch (e: Exception) {
             appendToTerminal("Error processing message: ${e.message}", "fail")
@@ -371,6 +420,10 @@ class MainActivity : AppCompatActivity() {
             val originalLine = json.optString("original_line", "unknown line")
             val incidentId = json.optString("incident_id")
             val expectedSha = json.optString("expected_sha256")
+            val repositoryContext = json.optString("repository_context", "").takeIf { it.isNotBlank() }
+            val repositorySymbols = json.optJSONArray("allowed_symbols")?.let { array ->
+                buildSet { for (index in 0 until array.length()) add(array.getString(index)) }
+            } ?: emptySet()
 
             // Update Home Screen Card
             val title = try {
@@ -421,7 +474,8 @@ class MainActivity : AppCompatActivity() {
 
             lifecycleScope.launch {
                 val (result, duration) = agent.analyzeError(
-                    errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId
+                    errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId,
+                    repositoryContext, repositorySymbols
                 )
                 
                 // PRINT FULL AI OUTPUT TO CONSOLE
@@ -446,10 +500,18 @@ class MainActivity : AppCompatActivity() {
                     binding.causeText.text = result.rootCause
                     binding.locationText.text = "${result.location} : ${result.repairLine ?: errorLine}"
                     
-                    if (result.repairCode != null) {
+                    if (result.patchType == com.devdeck.app.model.PatchType.DIFF && result.diffText != null) {
+                        binding.diffRemoved.text = "Unified Diff Generated"
+                        binding.diffAdded.visibility = View.VISIBLE
+                        binding.diffAdded.text = result.diffText
+                    } else if (result.repairCode != null) {
                         binding.diffAdded.visibility = View.VISIBLE
                         binding.diffAdded.text = "+ ${result.repairCode}"
-                        
+                    } else {
+                        binding.diffAdded.visibility = View.GONE
+                    }
+
+                    if (result.repairCode != null || result.diffText != null) {
                         binding.repairButton.visibility = View.VISIBLE
                         binding.repairButton.text = "Apply autonomous repair"
                         binding.repairButton.isEnabled = true
@@ -464,7 +526,6 @@ class MainActivity : AppCompatActivity() {
                             sendRepair(result)
                         }
                     } else {
-                        binding.diffAdded.visibility = View.GONE
                         binding.repairButton.visibility = View.GONE
                         
                         // Debugging: If no repair found, allow tapping the card to see raw AI output
@@ -493,6 +554,7 @@ class MainActivity : AppCompatActivity() {
         val json = when (result.patchType) {
             com.devdeck.app.model.PatchType.SINGLE_LINE -> JSONObject().apply {
                 put("type", "repair")
+                put("protocol_version", 2)
                 put("patch_type", "single_line")
                 put("file", result.repairFile)
                 put("line", result.repairLine)
@@ -502,6 +564,7 @@ class MainActivity : AppCompatActivity() {
             }
             com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
                 put("type", "repair")
+                put("protocol_version", 2)
                 put("patch_type", "diff")
                 put("file", result.repairFile)
                 put("diff_text", result.diffText)
@@ -510,7 +573,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         appendToTerminal("Sending ${result.patchType} repair to laptop...", "sys")
-        val sent = webSocket?.send(json.toString()) ?: false
+        val sent = relayService?.sendMessage(json.toString()) ?: false
         if (sent) {
             appendToTerminal("Repair payload SENT successfully.", "ok")
             binding.repairButton.text = "Repair sent to laptop"
@@ -566,13 +629,25 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Enter the Relay URL and Pairing Secret from your desktop bridge.")
             .setView(layout)
             .setPositiveButton("Save & connect") { _, _ ->
-                prefs.edit()
+                securePrefs.edit()
                     .putString("relay_url", urlInput.text.toString().trim())
                     .putString("pairing_secret", secretInput.text.toString().trim())
                     .apply()
-                connectToRelay()
+                stopService(Intent(this, RelayService::class.java))
+                startRelayService()
             }
-            .setNegativeButton("Cancel", null).show()
+            .setNeutralButton("Unpair") { _, _ ->
+                securePrefs.edit().clear().apply()
+                stopService(Intent(this, RelayService::class.java))
+                appendToTerminal("[Bridge] Unpaired successfully.", "sys")
+            }
+            .setNegativeButton("Pair with QR") { _, _ ->
+                val intent = Intent(this, CameraActivity::class.java).apply {
+                    putExtra(CameraActivity.EXTRA_PAIRING_MODE, true)
+                }
+                qrLauncher.launch(intent)
+            }
+            .show()
     }
 
     private fun showHistory() {
@@ -584,7 +659,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        cancelReconnect()
-        webSocket?.close(1000, "App destroyed")
+        relayService?.removeListener(relayListener)
+        unbindService(serviceConnection)
     }
 }

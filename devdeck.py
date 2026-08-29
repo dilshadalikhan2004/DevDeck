@@ -11,6 +11,10 @@ import uuid
 from pathlib import Path
 
 from bridge_security import canonical_project_root, sha256_file
+from repo_context import RepositoryIndex, build_evidence_pack
+
+
+_repository_indexes = {}
 
 async def send_error(error_data):
     uri = os.environ.get("DEVDECK_RELAY_URI", "ws://localhost:8765")
@@ -131,6 +135,19 @@ def build_incident_payload(command, stderr, project_root=None):
         relative_file = source_path.relative_to(project.path).as_posix()
         expected_sha256 = sha256_file(source_path)
 
+    context_budget = int(os.environ.get("DEVDECK_CONTEXT_TOKEN_BUDGET", "650"))
+    index = _repository_indexes.get(project.path)
+    if index is None:
+        index = RepositoryIndex.build(project.path)
+        _repository_indexes[project.path] = index
+    evidence = build_evidence_pack(
+        index=index,
+        error_text=clean_stderr(stderr),
+        target_file=relative_file,
+        target_line=line_num,
+        token_budget=context_budget,
+    )
+
     return {
         "type": "incident",
         "protocol_version": 2,
@@ -146,6 +163,9 @@ def build_incident_payload(command, stderr, project_root=None):
         "original_line": original_line,
         "language": detect_language(relative_file),
         "expected_sha256": expected_sha256,
+        "repository_context": evidence.text,
+        "repository_context_tokens": evidence.estimated_tokens,
+        "allowed_symbols": sorted(evidence.allowed_symbols),
     }
 
 def run_command(command):
@@ -195,6 +215,10 @@ AttributeError: 'NoneType' object has no attribute 'is_authenticated'"""
        44 |     return None"""
 
         payload = {
+            "type": "incident",
+            "protocol_version": 2,
+            "incident_id": str(uuid.uuid4()),
+            "project_id": "demo-project",
             "timestamp": datetime.now().isoformat(),
             "command": "demo-staged-bug",
             "error_text": demo_trace,

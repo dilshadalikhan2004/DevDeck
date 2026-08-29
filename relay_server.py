@@ -69,6 +69,11 @@ async def relay(websocket):
                         await websocket.send(json.dumps({"type": "pair_result", "success": False, "error": "Invalid secret"}))
                     continue
 
+                # 1.1 Ping/Pong
+                if data.get("type") == "ping":
+                    await websocket.send(json.dumps({"type": "pong", "timestamp": data.get("timestamp")}))
+                    continue
+
                 # 2. Repair (Requires Auth)
                 if data.get("type") == "repair":
                     if websocket not in authenticated_clients:

@@ -13,6 +13,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.devdeck.app.databinding.ActivityCameraBinding
+import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -85,24 +86,46 @@ class CameraActivity : AppCompatActivity() {
         val mediaImage = imageProxy.image
         if (mediaImage != null) {
             val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-
-            recognizer.process(image)
-                .addOnSuccessListener { visionText ->
-                    val resultIntent = Intent().apply {
-                        putExtra("scanned_text", visionText.text)
+            if (intent.getBooleanExtra(EXTRA_PAIRING_MODE, false)) {
+                val scanner = BarcodeScanning.getClient()
+                scanner.process(image)
+                    .addOnSuccessListener { barcodes ->
+                        val qr = barcodes.firstOrNull { it.rawValue != null }
+                        if (qr != null) {
+                            val resultIntent = Intent().apply {
+                                putExtra("qr_data", qr.rawValue)
+                            }
+                            setResult(RESULT_OK, resultIntent)
+                            finish()
+                        } else {
+                            Toast.makeText(this, "No QR code detected", Toast.LENGTH_SHORT).show()
+                            binding.progressBar.visibility = View.GONE
+                            binding.captureButton.isEnabled = true
+                        }
                     }
-                    setResult(RESULT_OK, resultIntent)
-                    finish()
-                }
-                .addOnFailureListener { e ->
-                    Toast.makeText(this, "OCR failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                    binding.progressBar.visibility = View.GONE
-                    binding.captureButton.isEnabled = true
-                }
-                .addOnCompleteListener {
-                    imageProxy.close()
-                }
+                    .addOnFailureListener { e ->
+                        Toast.makeText(this, "Scan failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        binding.progressBar.visibility = View.GONE
+                        binding.captureButton.isEnabled = true
+                    }
+                    .addOnCompleteListener { imageProxy.close() }
+            } else {
+                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                recognizer.process(image)
+                    .addOnSuccessListener { visionText ->
+                        val resultIntent = Intent().apply {
+                            putExtra("scanned_text", visionText.text)
+                        }
+                        setResult(RESULT_OK, resultIntent)
+                        finish()
+                    }
+                    .addOnFailureListener { e ->
+                        Toast.makeText(this, "OCR failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        binding.progressBar.visibility = View.GONE
+                        binding.captureButton.isEnabled = true
+                    }
+                    .addOnCompleteListener { imageProxy.close() }
+            }
         } else {
             imageProxy.close()
         }
@@ -130,6 +153,7 @@ class CameraActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val EXTRA_PAIRING_MODE = "pairing_mode"
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
     }

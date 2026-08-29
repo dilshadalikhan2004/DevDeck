@@ -11,21 +11,21 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.system.measureTimeMillis
 
-class DiagnosticAgent(private val context: Context) {
+class DiagnosticAgent(private val context: Context?) {
 
     private var llmInference: LlmInference? = null
-    private val projectContextManager = ProjectContextManager(context)
+    private val projectContextManager = context?.let { ProjectContextManager(it) }
     
     // Stored in preferences so event-time model provisioning can update it without a rebuild.
     private val modelPath: String
-        get() = context.getSharedPreferences("devdeck", Context.MODE_PRIVATE)
-            .getString("model_path", "/data/local/tmp/gemma-2b-it-gpu.bin")!!
+        get() = context?.getSharedPreferences("devdeck", Context.MODE_PRIVATE)
+            ?.getString("model_path", "/data/local/tmp/gemma-2b-it-gpu.bin")!!
 
     fun isModelAvailable(): Boolean = File(modelPath).exists()
     fun isEngineReady(): Boolean = llmInference != null
 
     suspend fun initModel() = withContext(Dispatchers.IO) {
-        if (llmInference != null) return@withContext
+        if (llmInference != null || context == null) return@withContext
         
         if (!isModelAvailable()) {
             Log.e("DevDeck", "Model file not found at $modelPath")
@@ -66,7 +66,9 @@ class DiagnosticAgent(private val context: Context) {
         lineNum: Int? = null,
         originalLine: String? = null,
         expectedSha256: String? = null,
-        incidentId: String? = null
+        incidentId: String? = null,
+        repositoryContext: String? = null,
+        repositorySymbols: Set<String> = emptySet()
     ): Pair<DiagnosticResult, Long> = withContext(Dispatchers.IO) {
         val inference = llmInference
         if (inference == null) {
@@ -80,7 +82,8 @@ class DiagnosticAgent(private val context: Context) {
         } else ""
 
         val originalIds = originalLine?.let { extractIdentifiers(it) }?.joinToString(", ") ?: "None"
-        val ruleContext = projectContextManager.getFormattedContext()
+        val ruleContext = projectContextManager?.getFormattedContext() ?: ""
+        val repositorySection = if (!repositoryContext.isNullOrBlank()) "\nRETRIEVED REPOSITORY EVIDENCE:\n$repositoryContext\n" else ""
 
         // High-accuracy few-shot prompt optimized for small on-device SLMs (Gemma-2B)
         val prompt = """
@@ -90,7 +93,8 @@ class DiagnosticAgent(private val context: Context) {
             STRICT RULES:
             1. Output EITHER a single-line fix between <<<FIX>>> and <<<END>>> OR a multi-line unified diff between <<<DIFF>>> and <<<END>>>.
             2. For multi-line errors, output a unified diff format patch. Max 20 lines changed per diff.
-            3. Do not invent new variable names; use existing identifiers: [$originalIds].
+            3. Do not invent names. Use only target identifiers [$originalIds] or repository symbols: [${repositorySymbols.joinToString(", ")}].
+            3a. If evidence is insufficient, output <<<FIX>>>UNKNOWN<<<END>>>.
             4. Include 1-2 lines of surrounding unchanged context in diffs starting with spaces. Deleted lines start with '-' and added lines start with '+'.
             5. No explanation or commentary.
 
@@ -134,6 +138,7 @@ class DiagnosticAgent(private val context: Context) {
             Error:
             ${extractCleanError(errorText)}
             $contextSection
+            $repositorySection
             Target Code Context:
             $originalLine
             <end_of_turn>
@@ -160,7 +165,7 @@ class DiagnosticAgent(private val context: Context) {
         val tokenCount = response.length / 4f
         val tps = if (duration > 0) (tokenCount / (duration / 1000f)) else 0f
 
-        val result = parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext)
+        val result = parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext, repositorySymbols)
         val finalResult = result.copy(expectedSha256 = expectedSha256, incidentId = incidentId)
         return@withContext finalResult to duration
     }
@@ -203,7 +208,7 @@ class DiagnosticAgent(private val context: Context) {
             .toSet()
     }
 
-    private fun parseResponse(
+    internal fun parseResponse(
         raw: String,
         tps: Float,
         mem: Int,
@@ -211,7 +216,8 @@ class DiagnosticAgent(private val context: Context) {
         lineNum: Int?,
         originalLine: String?,
         errorText: String,
-        sourceContext: String?
+        sourceContext: String?,
+        repositorySymbols: Set<String> = emptySet()
     ): DiagnosticResult {
         return try {
             // Try diff format first
@@ -237,7 +243,7 @@ class DiagnosticAgent(private val context: Context) {
                     }
 
                     // Semantic grounding check on added content
-                    val originalIds = originalLine?.let { extractIdentifiers(it) } ?: emptySet()
+                    val originalIds = (originalLine?.let { extractIdentifiers(it) } ?: emptySet()) + repositorySymbols
                     val addedIds = extractIdentifiers(addedContent)
                     val hallucinatedIds = addedIds - originalIds
 
@@ -278,7 +284,7 @@ class DiagnosticAgent(private val context: Context) {
                 ?.lines()?.firstOrNull { it.isNotBlank() }?.trim()
 
             // Semantic Grounding Check
-            val originalIds = originalLine?.let { extractIdentifiers(it) } ?: emptySet()
+            val originalIds = (originalLine?.let { extractIdentifiers(it) } ?: emptySet()) + repositorySymbols
             val fixIds = extractedFix?.let { extractIdentifiers(it) } ?: emptySet()
             val hallucinatedIds = (fixIds - originalIds)
             val hasNewIdentifiers = originalLine != null && extractedFix != null && hallucinatedIds.isNotEmpty()
