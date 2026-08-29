@@ -158,11 +158,21 @@ def get_brain(project_root: str | Path) -> tuple[ProjectBrain, bool]:
 def build_incident_payload(command: str, stderr: str, project_root: str | Path | None = None) -> dict:
     source_context, file_path, line_num, original_line = get_error_metadata(stderr)
     project = canonical_project_root(project_root or Path.cwd())
-    source_path = Path(file_path).resolve() if file_path and Path(file_path).exists() else None
+    source_path = None
+    if file_path:
+        cand_p = (project.path / file_path).resolve()
+        if cand_p.is_file():
+            source_path = cand_p
+        elif Path(file_path).resolve().is_file():
+            source_path = Path(file_path).resolve()
+
     relative_file = None
     expected_sha256 = None
-    if source_path and source_path.is_file() and project.path in source_path.parents:
-        relative_file = source_path.relative_to(project.path).as_posix()
+    if source_path and source_path.is_file():
+        if project.path in source_path.parents or project.path == source_path.parent:
+            relative_file = source_path.relative_to(project.path).as_posix()
+        else:
+            relative_file = source_path.name
         expected_sha256 = sha256_file(source_path)
 
     context_budget = int(os.environ.get("DEVDECK_CONTEXT_TOKEN_BUDGET", "650"))

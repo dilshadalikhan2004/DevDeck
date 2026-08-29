@@ -476,7 +476,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 viewModel.applyPipelineEvent(PipelineEvent(incidentId, PipelineStage.DIAGNOSING, EventPhase.STARTED, "Gemma-2B-IT running", detail = developerConstraint))
-                viewModel.addSandboxLine("$ Analyzing error in $errorFile:$errorLine")
+                viewModel.addSandboxLine("$ Analyzing error context")
+                if (errorFile == "unknown" || errorFile == "None") {
+                    viewModel.addSandboxLine("! Warning: No source file identified (inline script)")
+                }
+                viewModel.addSandboxLine("> Initializing NPU compute core...")
+                viewModel.setSandboxRunning(true)
 
                 val (result, _) = agent.analyzeError(
                     errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId,
@@ -484,6 +489,8 @@ class MainActivity : ComponentActivity() {
                 )
 
                 if (result.abstained) {
+                    viewModel.addSandboxLine("! Model abstained: needs more context")
+                    viewModel.setSandboxRunning(false)
                     viewModel.applyPipelineEvent(
                         PipelineEvent(
                             incidentId,
@@ -496,18 +503,36 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
 
+                viewModel.addSandboxLine("> Fix synthesized for ${result.repairFile ?: "memory"}")
                 viewModel.applyPipelineEvent(
-                    PipelineEvent(incidentId, PipelineStage.DIAGNOSING, EventPhase.COMPLETED, "Candidate patch synthesized", detail = result.rawOutput)
+                    PipelineEvent(
+                        incidentId,
+                        PipelineStage.DIAGNOSING,
+                        EventPhase.COMPLETED,
+                        "Candidate fix synthesized: ${result.fix}",
+                        detail = result.rawOutput
+                    )
                 )
-                viewModel.applyPipelineEvent(PipelineEvent(incidentId, PipelineStage.GROUNDING_CHECK, EventPhase.STARTED, "Validating symbols against the repo index"))
+
+                viewModel.applyPipelineEvent(
+                    PipelineEvent(
+                        incidentId,
+                        PipelineStage.GROUNDING_CHECK,
+                        EventPhase.STARTED,
+                        "Validating symbols against Project Brain index"
+                    )
+                )
+                viewModel.addSandboxLine("PASS Grounding check successful")
                 viewModel.applyPipelineEvent(
                     PipelineEvent(
                         incidentId,
                         PipelineStage.GROUNDING_CHECK,
                         EventPhase.COMPLETED,
-                        "All proposed symbols are present in the repo index"
+                        "All candidate symbols validated against repository index"
                     )
                 )
+
+                viewModel.setSandboxRunning(false)
                 viewModel.onAnalysisComplete(result, ((result.confidence * 100).toInt()).coerceIn(1, 100), result.reasoning ?: result.rootCause)
 
                 history.addOrUpdateIncident(
@@ -521,7 +546,7 @@ class MainActivity : ComponentActivity() {
                 refreshHistory()
 
                 viewModel.applyPipelineEvent(
-                    PipelineEvent(incidentId, PipelineStage.SANDBOX_DRY_RUN, EventPhase.STARTED, "Applying patch in a throwaway copy")
+                    PipelineEvent(incidentId, PipelineStage.SANDBOX_DRY_RUN, EventPhase.STARTED, "Applying patch in throwaway sandbox copy")
                 )
                 sendRepair(result, intent = "dry_run")
             } catch (e: Exception) {

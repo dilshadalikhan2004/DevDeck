@@ -61,7 +61,8 @@ def repair_for_incident(payload, incident_store):
     project = canonical_project_root(project_root)
     if project.project_id != repair.project_id:
         raise ValueError("incident project root does not match project id")
-    return repair, incident, resolve_project_file(project, repair.file)
+    target_path = resolve_project_file(project, repair.file) if (repair.file and repair.file not in ("unknown", "None")) else None
+    return repair, incident, target_path
 
 
 def sandbox_project_root(incident):
