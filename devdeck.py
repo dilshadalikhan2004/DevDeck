@@ -234,12 +234,18 @@ def run_command_with_watch(command: str) -> int:
 
     print(f"\n[DevDeck Active Watch] Executing: {command} (Autonomy Policy: {policy.level.value})")
     print("=" * 65)
+    env = os.environ.copy()
+    if (root / "src").is_dir():
+        src_path = str((root / "src").resolve())
+        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+
     process = subprocess.Popen(
         command,
         shell=True,
         stdout=sys.stdout,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
+        env=env
     )
 
     _, stderr = process.communicate()

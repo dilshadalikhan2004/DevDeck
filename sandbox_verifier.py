@@ -177,6 +177,11 @@ class SandboxVerifier:
                     emit("PASS tests/plugins/loader-integrity.spec.js")
 
                     # Run command in sandbox
+                    env = os.environ.copy()
+                    if (sandbox_root / "src").is_dir():
+                        src_path = str((sandbox_root / "src").resolve())
+                        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+
                     start_t = time.time()
                     proc = subprocess.run(
                         command,
@@ -184,6 +189,7 @@ class SandboxVerifier:
                         shell=True,
                         capture_output=True,
                         text=True,
+                        env=env,
                         timeout=timeout_seconds,
                     )
                     duration_ms = int((time.time() - start_t) * 1000)
