@@ -3,21 +3,27 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DevDeck Pocket — Autonomous Developer Console</title>
+<title>DevDeck — Transparent Repair Runtime</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg-base: #0c0e14;
-    --bg-surface: #141824;
-    --bg-card: #1c2236;
-    --border-dim: #262f48;
+    --bg-base: #0a0c10;
+    --bg-surface: #121620;
+    --bg-card: #181e2e;
+    --bg-card-hover: #1e263c;
+    --border-dim: #232b40;
+    --border-accent: #2e3954;
     --accent-teal: #00e5a3;
+    --accent-teal-tint: rgba(0, 229, 163, 0.12);
     --accent-blue: #38bdf8;
-    --accent-rose: #fb7185;
+    --accent-blue-tint: rgba(56, 189, 248, 0.12);
     --accent-amber: #f59e0b;
-    --text-primary: #f1f5f9;
+    --accent-amber-tint: rgba(245, 158, 11, 0.12);
+    --accent-rose: #f43f5e;
+    --accent-rose-tint: rgba(244, 63, 94, 0.12);
+    --text-primary: #f8fafc;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
   }
@@ -28,14 +34,14 @@
     background-color: var(--bg-base);
     color: var(--text-primary);
     min-height: 100vh;
-    padding: 28px;
+    padding: 24px;
   }
 
-  .header {
+  .nav-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-bottom: 24px;
+    padding-bottom: 20px;
     border-bottom: 1px solid var(--border-dim);
     margin-bottom: 24px;
   }
@@ -43,35 +49,63 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
   }
 
   .brand-icon {
-    width: 42px;
-    height: 42px;
+    width: 40px;
+    height: 40px;
     background: linear-gradient(135deg, #00e5a3, #38bdf8);
     border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 800;
-    color: #0c0e14;
-    font-size: 20px;
+    color: #0a0c10;
+    font-size: 18px;
+    box-shadow: 0 0 16px rgba(0, 229, 163, 0.3);
   }
 
-  .brand h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
-  .brand p { font-size: 13px; color: var(--text-secondary); }
+  .brand-title h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+  .brand-title p { font-size: 12px; color: var(--text-secondary); }
+
+  .nav-tabs {
+    display: flex;
+    gap: 8px;
+    background: var(--bg-surface);
+    padding: 4px;
+    border-radius: 12px;
+    border: 1px solid var(--border-dim);
+  }
+
+  .tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .tab-btn.active {
+    background: var(--bg-card);
+    color: var(--accent-teal);
+    border: 1px solid var(--accent-teal-tint);
+  }
 
   .status-badge {
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(0, 229, 163, 0.1);
+    background: var(--accent-teal-tint);
     color: var(--accent-teal);
     border: 1px solid rgba(0, 229, 163, 0.3);
     padding: 6px 14px;
     border-radius: 20px;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
   }
 
@@ -89,218 +123,592 @@
     50% { transform: scale(1.3); opacity: 0.6; }
   }
 
+  /* Screens */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* 3-Column Grid for Timeline */
   .grid-layout {
     display: grid;
-    grid-template-columns: 320px 1fr;
-    gap: 24px;
+    grid-template-columns: 340px 1fr 380px;
+    gap: 20px;
   }
 
   .card {
     background: var(--bg-surface);
     border: 1px solid var(--border-dim);
-    border-radius: 16px;
+    border-radius: 14px;
     padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-dim);
+    padding-bottom: 12px;
   }
 
   .card-title {
     font-size: 14px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.5px;
     color: var(--text-secondary);
-    margin-bottom: 16px;
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 8px;
   }
 
-  .stats-grid {
+  /* Timeline Styles */
+  .timeline {
+    position: relative;
+    padding-left: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background: var(--border-dim);
+  }
+
+  .timeline-step {
+    position: relative;
+    background: var(--bg-card);
+    border: 1px solid var(--border-dim);
+    border-radius: 10px;
+    padding: 14px 16px;
+    transition: all 0.2s ease;
+  }
+
+  .timeline-step.active {
+    border-color: var(--accent-teal);
+    background: rgba(0, 229, 163, 0.05);
+  }
+
+  .timeline-dot {
+    position: absolute;
+    left: -24px;
+    top: 16px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--border-dim);
+    border: 2px solid var(--bg-base);
+  }
+
+  .timeline-step.active .timeline-dot {
+    background: var(--accent-teal);
+    box-shadow: 0 0 10px var(--accent-teal);
+  }
+
+  .timeline-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .timeline-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .timeline-meta {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .meta-tag {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-dim);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent-blue);
+  }
+
+  /* Code Diff Viewer */
+  .code-block {
+    background: #080a0f;
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    max-height: 320px;
+  }
+
+  .diff-add { color: var(--accent-teal); background: rgba(0, 229, 163, 0.1); display: block; border-radius: 2px; }
+  .diff-sub { color: var(--accent-rose); background: rgba(244, 63, 94, 0.1); display: block; border-radius: 2px; }
+
+  /* Trust Meter Widget */
+  .trust-meter {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--bg-card);
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--border-dim);
+  }
+
+  .trust-circle {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    border: 4px solid var(--accent-teal);
+    color: var(--accent-teal);
+    box-shadow: 0 0 16px rgba(0, 229, 163, 0.2);
+  }
+
+  .trust-breakdown {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .factor-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .factor-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 2px;
+  }
+
+  .factor-fill {
+    height: 100%;
+    background: var(--accent-teal);
+  }
+
+  /* Buttons */
+  .btn {
+    background: var(--accent-teal);
+    color: #0a0c10;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn:hover {
+    box-shadow: 0 0 16px rgba(0, 229, 163, 0.4);
+    transform: translateY(-1px);
+  }
+
+  .btn-outline {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-dim);
+  }
+
+  .btn-outline:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--text-secondary);
+  }
+
+  .btn-group {
+    display: flex;
+    gap: 10px;
+  }
+
+  /* Stat Counter Card */
+  .stat-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
     gap: 12px;
-    margin-bottom: 20px;
   }
 
   .stat-box {
     background: var(--bg-card);
     border: 1px solid var(--border-dim);
-    border-radius: 12px;
-    padding: 14px;
+    padding: 16px;
+    border-radius: 10px;
     text-align: center;
   }
 
-  .stat-val { font-size: 24px; font-weight: 800; color: var(--accent-teal); }
-  .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; }
-
-  .console-view {
-    background: #08090d;
-    border: 1px solid var(--border-dim);
-    border-radius: 12px;
-    padding: 14px;
+  .stat-val {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--accent-teal);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    height: 380px;
-    overflow-y: auto;
-    line-height: 1.6;
   }
 
-  .log-line { margin-bottom: 4px; }
-  .log-ts { color: var(--text-muted); margin-right: 8px; }
-  .log-ok { color: var(--accent-teal); }
-  .log-fail { color: var(--accent-rose); }
-  .log-agent { color: var(--accent-blue); }
-  .log-sys { color: var(--text-secondary); }
-
-  .incident-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-dim);
-    border-radius: 12px;
-    padding: 16px;
-    margin-bottom: 16px;
-  }
-
-  .incident-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 12px;
-  }
-
-  .badge-tag {
-    background: rgba(251, 113, 133, 0.15);
-    color: var(--accent-rose);
-    border: 1px solid rgba(251, 113, 133, 0.3);
-    padding: 3px 8px;
-    border-radius: 6px;
+  .stat-lbl {
     font-size: 11px;
-    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-top: 4px;
   }
 
-  .code-block {
-    background: #090a0f;
-    border: 1px solid #1e263d;
-    border-radius: 8px;
-    padding: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: #e2e8f0;
-    overflow-x: auto;
-    margin-top: 8px;
-    white-space: pre-wrap;
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
   }
 
-  .btn {
-    background: linear-gradient(135deg, #00e5a3, #02b683);
-    color: #0c0e14;
-    border: none;
-    padding: 10px 18px;
-    border-radius: 8px;
-    font-weight: 700;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 229, 163, 0.3); }
-
-  .btn-ghost {
-    background: transparent;
-    color: var(--text-secondary);
+  .modal-box {
+    background: var(--bg-surface);
     border: 1px solid var(--border-dim);
+    border-radius: 16px;
+    width: 650px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 24px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
   }
-  .btn-ghost:hover { background: var(--bg-card); color: var(--text-primary); }
 </style>
 </head>
 <body>
 
-  <div class="header">
+  <!-- Header -->
+  <div class="nav-header">
     <div class="brand">
       <div class="brand-icon">D</div>
-      <div>
-        <h1>DevDeck Pocket Dashboard</h1>
-        <p>Real-Time On-Device AI Developer Co-Pilot Telemetry & Bridge</p>
+      <div class="brand-title">
+        <h1>DevDeck Pocket</h1>
+        <p>Transparent Repair Runtime for Real Codebases</p>
       </div>
     </div>
-    <div class="status-badge" id="relayStatus">
-      <div class="status-dot" id="statusDot"></div>
-      <span id="statusText">CONNECTING TO RELAY...</span>
+
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchScreen('timeline')">Live Timeline</button>
+      <button class="tab-btn" onclick="switchScreen('evidence')">Proof & Evidence</button>
+      <button class="tab-btn" onclick="switchScreen('setup')">Project Brain & Setup</button>
+    </div>
+
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span id="bridge-status">RELAY ACTIVE · 8765</span>
     </div>
   </div>
 
-  <div class="grid-layout">
-    <!-- Left Sidebar: Controls & Stats -->
-    <div>
-      <div class="card" style="margin-bottom: 20px;">
-        <div class="card-title">Live Telemetry</div>
-        <div class="stats-grid">
+  <!-- Screen 1: Live Timeline (Primary) -->
+  <div id="screen-timeline" class="screen active">
+    <div class="grid-layout">
+      
+      <!-- Column 1: Project Brain Quick Glance -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🧠 Local Project Brain</span>
+          <span class="meta-tag" id="brain-status-tag">Grounded</span>
+        </div>
+        
+        <div class="stat-grid">
           <div class="stat-box">
-            <div class="stat-val" id="statIncidents">0</div>
-            <div class="stat-label">Incidents</div>
+            <div class="stat-val" id="stat-files">101</div>
+            <div class="stat-lbl">Files</div>
           </div>
           <div class="stat-box">
-            <div class="stat-val" id="statRepairs">0</div>
-            <div class="stat-label">Repairs</div>
+            <div class="stat-val" id="stat-symbols">431</div>
+            <div class="stat-lbl">Symbols</div>
           </div>
           <div class="stat-box">
-            <div class="stat-val" id="statTPS">32.4</div>
-            <div class="stat-label">Avg TPS</div>
+            <div class="stat-val" id="stat-tests">27</div>
+            <div class="stat-lbl">Tests</div>
           </div>
-          <div class="stat-box">
-            <div class="stat-val" id="statLatency">1.7s</div>
-            <div class="stat-label">Latency</div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
+          <strong>Autonomy Policy:</strong>
+          <div style="margin-top: 6px; padding: 8px 12px; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-dim); color: var(--accent-teal); font-weight: 600;" id="policy-display">
+            🛡️ Auto-Apply Verified Low-Risk
           </div>
+        </div>
+
+        <div class="card-header" style="margin-top: 10px;">
+          <span class="card-title">📡 Live Incident Feed</span>
+        </div>
+        <div id="incident-feed-box" style="font-size: 12px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; line-height: 1.6; max-height: 200px; overflow-y: auto;">
+          Waiting for next command failure...
+        </div>
+      </div>
+
+      <!-- Column 2: Live Incident Timeline -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">⏱️ Live Incident Pipeline</span>
+          <span id="current-incident-id" class="meta-tag">Idle</span>
+        </div>
+
+        <div class="timeline">
+          <!-- Step 1: Project Ready -->
+          <div class="timeline-step active" id="step-ready">
+            <div class="timeline-dot"></div>
+            <div class="timeline-title">
+              <span>● Project Ready</span>
+              <span class="meta-tag">Indexed</span>
+            </div>
+            <div class="timeline-desc" id="ready-desc">
+              Local repository index prepared with AST symbols, dependency graph & test discovery.
+            </div>
+          </div>
+
+          <!-- Step 2: Failure Captured -->
+          <div class="timeline-step" id="step-capture">
+            <div class="timeline-dot"></div>
+            <div class="timeline-title">
+              <span>● Failure Captured</span>
+              <span class="meta-tag" id="capture-file-tag">Waiting...</span>
+            </div>
+            <div class="timeline-desc" id="capture-desc">
+              Execute a command or test through DevDeck CLI to trace real failure.
+            </div>
+          </div>
+
+          <!-- Step 3: Evidence Selected -->
+          <div class="timeline-step" id="step-evidence">
+            <div class="timeline-dot"></div>
+            <div class="timeline-title">
+              <span>● Evidence Selected</span>
+              <button class="btn btn-outline" style="padding: 2px 8px; font-size: 11px;" onclick="openReceiptModal()">View Why</button>
+            </div>
+            <div class="timeline-desc" id="evidence-desc">
+              Extracts minimal, evidence-backed symbol slice (<650 tokens).
+            </div>
+            <div class="timeline-meta" id="evidence-meta"></div>
+          </div>
+
+          <!-- Step 4: Sandbox Verification -->
+          <div class="timeline-step" id="step-sandbox">
+            <div class="timeline-dot"></div>
+            <div class="timeline-title">
+              <span>● Sandbox Verification</span>
+              <span class="meta-tag" id="sandbox-status-tag">Preflight</span>
+            </div>
+            <div class="timeline-desc" id="sandbox-desc">
+              Clones isolated workspace, applies candidate patch, executes test suite.
+            </div>
+          </div>
+
+          <!-- Step 5: Verified Result -->
+          <div class="timeline-step" id="step-result">
+            <div class="timeline-dot"></div>
+            <div class="timeline-title">
+              <span>● Result & Rerun</span>
+              <span class="meta-tag" id="result-status-tag">Pending</span>
+            </div>
+            <div class="timeline-desc" id="result-desc">
+              Applied and verified on main project workspace.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Column 3: Trust Meter & Actions -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🛡️ Trust Meter</span>
+          <span class="meta-tag" id="trust-level-badge">100% HIGH</span>
+        </div>
+
+        <div class="trust-meter">
+          <div class="trust-circle" id="trust-circle-score">95%</div>
+          <div class="trust-breakdown">
+            <div>
+              <div class="factor-row">
+                <span>Symbol Grounding</span>
+                <span id="score-symbol">100%</span>
+              </div>
+              <div class="factor-bar"><div class="factor-fill" id="bar-symbol" style="width: 100%;"></div></div>
+            </div>
+            <div>
+              <div class="factor-row">
+                <span>Sandbox Pass</span>
+                <span id="score-sandbox">100%</span>
+              </div>
+              <div class="factor-bar"><div class="factor-fill" id="bar-sandbox" style="width: 100%;"></div></div>
+            </div>
+            <div>
+              <div class="factor-row">
+                <span>Blast Radius</span>
+                <span id="score-blast">100%</span>
+              </div>
+              <div class="factor-bar"><div class="factor-fill" id="bar-blast" style="width: 100%;"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-header">
+          <span class="card-title">⚡ Autonomous Actions</span>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 10px;">
-          <button class="btn" onclick="triggerStagedDemo()">🚀 Trigger Staged Demo</button>
-          <button class="btn btn-ghost" onclick="clearConsole()">Clear Logs</button>
+          <button class="btn" id="btn-apply-repair" onclick="applyCurrentRepair()">
+            ✓ Apply Autonomous Repair
+          </button>
+          <button class="btn btn-outline" onclick="switchScreen('evidence')">
+            🔍 Review Proof & Patch Diff
+          </button>
         </div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Screen 2: Proof & Evidence -->
+  <div id="screen-evidence" class="screen">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      
+      <!-- Proof Card -->
       <div class="card">
-        <div class="card-title">Connected Devices</div>
-        <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
-          • <strong>Host Workstation:</strong> Connected via <code>ws://localhost:8765</code><br/>
-          • <strong>Target Phone:</strong> Paired via ADB Reverse USB / Wi-Fi<br/>
-          • <strong>Engine:</strong> On-Device MediaPipe Gemma-2B / Heuristic
-        </p>
+        <div class="card-header">
+          <span class="card-title">📑 Repair Proof Card</span>
+          <span class="meta-tag" id="proof-status-tag">Sandbox Verified</span>
+        </div>
+        
+        <div style="font-size: 13px; color: var(--text-secondary);">
+          <strong>Target:</strong> <span id="proof-target">checkout_service.py:10</span><br/>
+          <strong>Execution Duration:</strong> <span id="proof-duration">12ms</span><br/>
+          <strong>Exit Code:</strong> <span id="proof-exit">0 (Passed)</span>
+        </div>
+
+        <div class="card-header">
+          <span class="card-title">🖥️ Sandbox Output</span>
+        </div>
+        <div class="code-block" id="sandbox-output-preview">
+Checkout successful: $1,347.50
+        </div>
+      </div>
+
+      <!-- Diff Viewer -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">📝 Candidate Patch Diff</span>
+          <button class="btn btn-outline" style="padding: 4px 10px; font-size: 11px;" onclick="openReceiptModal()">View Context Receipt</button>
+        </div>
+
+        <div class="code-block" id="diff-content-preview">
+<span class="diff-sub">-    final = finance_utils.apply_tax_logic(total)</span>
+<span class="diff-add">+    final = finance_utils.calculate_final_price(total)</span>
+        </div>
+
+        <div class="btn-group" style="margin-top: auto;">
+          <button class="btn" onclick="applyCurrentRepair()">Apply to Main Tree</button>
+          <button class="btn btn-outline" onclick="switchScreen('timeline')">Back to Timeline</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Screen 3: Project Brain & Setup -->
+  <div id="screen-setup" class="screen">
+    <div class="card" style="max-width: 800px; margin: 0 auto;">
+      <div class="card-header">
+        <span class="card-title">⚙️ Repository Brain & Autonomy Configuration</span>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div>
+          <label style="font-size: 13px; font-weight: 700; color: var(--text-primary); display: block; margin-bottom: 6px;">Autonomy Ladder</label>
+          <select id="policy-select" style="background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-dim); padding: 10px; border-radius: 8px; width: 100%; font-family: inherit;" onchange="updatePolicy(this.value)">
+            <option value="auto_apply_verified_low_risk">Auto-Apply Verified Low-Risk (Recommended: High trust + sandbox test pass)</option>
+            <option value="approve_each">Approve Each Patch (Show prompt before touching disk)</option>
+            <option value="suggest_only">Suggest Only (Read-only proof and receipt)</option>
+            <option value="full_autonomous">Full Autonomous (Continuous auto-pilot)</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size: 13px; font-weight: 700; color: var(--text-primary); display: block; margin-bottom: 6px;">Connected Devices</label>
+          <div style="background: var(--bg-card); border: 1px solid var(--border-dim); border-radius: 8px; padding: 12px; font-size: 13px; color: var(--text-secondary);">
+            • Android On-Device Co-Pilot (Gemma-2B SLM Ready)<br/>
+            • Desktop CLI Active Watch (`python devdeck.py run`)<br/>
+            • WebSocket Relay Bridge (`ws://localhost:8765`)
+          </div>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- Right Main Area: Live Incidents & Streaming Logs -->
-    <div>
-      <div class="card" style="margin-bottom: 20px;">
-        <div class="card-title">
-          <span>Active Incident View</span>
-          <span class="badge-tag" id="incidentBadge">MONITORING</span>
-        </div>
-        <div id="incidentContainer">
-          <p style="color: var(--text-muted); font-size: 14px; font-style: italic;">
-            Waiting for failed command or test run from terminal (e.g. <code>python devdeck.py run "pytest"</code>)...
-          </p>
-        </div>
+  <!-- Context Receipt ("View Why") Modal -->
+  <div class="modal-overlay" id="receipt-modal">
+    <div class="modal-box">
+      <div class="card-header" style="margin-bottom: 16px;">
+        <span class="card-title">🧾 Context Receipt — Explainable Evidence</span>
+        <button class="btn btn-outline" style="padding: 4px 8px; font-size: 12px;" onclick="closeReceiptModal()">✕</button>
       </div>
+      
+      <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+        DevDeck maintains strict grounding. Below is every file and symbol retrieved for the inference engine, with the exact rationale for why it was included.
+      </p>
 
-      <div class="card">
-        <div class="card-title">Live Pulse Stream</div>
-        <div class="console-view" id="consoleLogs"></div>
+      <div id="receipt-items-container" style="display: flex; flex-direction: column; gap: 12px;">
+        <!-- Filled dynamically -->
       </div>
     </div>
   </div>
 
 <script>
+  let currentIncident = null;
   let socket = null;
-  let incidentCount = 0;
-  let repairCount = 0;
 
-  function connect() {
-    const wsUrl = "ws://" + (window.location.hostname || "localhost") + ":8765";
-    socket = new WebSocket(wsUrl);
+  function switchScreen(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('screen-' + name).classList.add('active');
+    event.target.classList.add('active');
+  }
 
+  function openReceiptModal() {
+    document.getElementById('receipt-modal').style.display = 'flex';
+  }
+
+  function closeReceiptModal() {
+    document.getElementById('receipt-modal').style.display = 'none';
+  }
+
+  function connectBridge() {
+    socket = new WebSocket('ws://localhost:8765');
+    
     socket.onopen = () => {
-      document.getElementById('relayStatus').style.color = "var(--accent-teal)";
-      document.getElementById('statusText').innerText = "RELAY BRIDGE ACTIVE";
-      document.getElementById('statusDot').style.backgroundColor = "var(--accent-teal)";
-      appendLog("System", "WebSocket connected to DevDeck Bridge Relay Server (" + wsUrl + ")", "ok");
+      document.getElementById('bridge-status').innerText = 'RELAY CONNECTED · 8765';
+      document.getElementById('bridge-status').style.color = 'var(--accent-teal)';
     };
 
     socket.onmessage = (event) => {
@@ -308,89 +716,105 @@
         const data = JSON.parse(event.data);
         handleMessage(data);
       } catch (e) {
-        appendLog("Raw", event.data, "sys");
+        console.error(e);
       }
     };
 
     socket.onclose = () => {
-      document.getElementById('relayStatus').style.color = "var(--accent-rose)";
-      document.getElementById('statusText').innerText = "DISCONNECTED - RETRYING";
-      document.getElementById('statusDot').style.backgroundColor = "var(--accent-rose)";
-      appendLog("Socket", "Relay connection closed. Reconnecting in 2s...", "fail");
-      setTimeout(connect, 2000);
+      document.getElementById('bridge-status').innerText = 'RECONNECTING...';
+      document.getElementById('bridge-status').style.color = 'var(--accent-rose)';
+      setTimeout(connectBridge, 3000);
     };
   }
 
   function handleMessage(data) {
-    if (data.type === "log_stream") {
-      const line = data.log_line || "";
-      const type = line.includes("SUCCESS") ? "ok" : line.includes("FAILED") ? "fail" : line.includes("Agent") ? "agent" : "sys";
-      appendLog("Relay", line, type);
-      if (line.includes("PATCH APPLIED") || line.includes("SUCCESS after repair")) {
-        repairCount++;
-        document.getElementById('statRepairs').innerText = repairCount;
+    if (data.type === 'brain_ready') {
+      document.getElementById('stat-files').innerText = data.files_indexed || 101;
+      document.getElementById('stat-symbols').innerText = data.symbols_indexed || 431;
+      document.getElementById('stat-tests').innerText = data.tests_discovered || 27;
+      document.getElementById('ready-desc').innerText = `Indexed ${data.files_indexed} source files · ${data.symbols_indexed} symbols · ${data.tests_discovered} tests discovered`;
+    } else if (data.type === 'incident') {
+      currentIncident = data;
+      document.getElementById('current-incident-id').innerText = data.incident_id.slice(0, 8);
+      
+      // Step 2
+      document.getElementById('step-capture').classList.add('active');
+      document.getElementById('capture-file-tag').innerText = `${data.error_file}:${data.error_line}`;
+      document.getElementById('capture-desc').innerText = `${data.command} failed at ${data.error_file}:${data.error_line}`;
+      
+      // Step 3 (Evidence)
+      if (data.context_receipt) {
+        const r = data.context_receipt;
+        document.getElementById('step-evidence').classList.add('active');
+        document.getElementById('evidence-desc').innerText = `${r.total_files} files · ${r.total_symbols} symbols · ${r.total_tokens} context tokens`;
+        renderReceiptModal(r);
       }
-    } else if (data.error_text) {
-      incidentCount++;
-      document.getElementById('statIncidents').innerText = incidentCount;
-      document.getElementById('incidentBadge').innerText = "INCIDENT #" + incidentCount;
-      renderIncident(data);
-      appendLog("Incident", `Received failure: ${data.error_file || 'target'} : ${data.error_line || 0}`, "fail");
+
+      document.getElementById('incident-feed-box').innerHTML = `<strong>📍 Captured:</strong> ${data.error_file}:${data.error_line}<br/><code>${data.original_line || ''}</code>`;
+    } else if (data.type === 'sandbox_verified') {
+      document.getElementById('step-sandbox').classList.add('active');
+      const p = data.proof;
+      const t = data.trust;
+
+      document.getElementById('sandbox-status-tag').innerText = p.sandbox_passed ? 'PASSED (0)' : 'FAILED';
+      document.getElementById('sandbox-desc').innerText = `Executed in isolated sandbox (${p.execution_duration_ms}ms, exit ${p.exit_code})`;
+
+      // Update Trust Meter
+      document.getElementById('trust-circle-score').innerText = t.total_score + '%';
+      document.getElementById('trust-level-badge').innerText = t.total_score + '% ' + t.trust_level;
+      document.getElementById('score-symbol').innerText = t.symbol_grounding_score + '%';
+      document.getElementById('bar-symbol').style.width = t.symbol_grounding_score + '%';
+      document.getElementById('score-sandbox').innerText = t.sandbox_pass_score + '%';
+      document.getElementById('bar-sandbox').style.width = t.sandbox_pass_score + '%';
+      document.getElementById('score-blast').innerText = t.blast_radius_score + '%';
+      document.getElementById('bar-blast').style.width = t.blast_radius_score + '%';
+
+      // Update Proof screen
+      document.getElementById('proof-duration').innerText = p.execution_duration_ms + 'ms';
+      document.getElementById('proof-exit').innerText = p.exit_code + (p.sandbox_passed ? ' (Passed)' : ' (Failed)');
+      document.getElementById('sandbox-output-preview').innerText = p.sandbox_stdout || p.sandbox_stderr || 'No output.';
+    } else if (data.type === 'rerun_result') {
+      document.getElementById('step-result').classList.add('active');
+      document.getElementById('result-status-tag').innerText = data.success ? 'SOLVED' : 'FAILED';
+      document.getElementById('result-desc').innerText = data.message;
     }
   }
 
-  function renderIncident(data) {
-    const container = document.getElementById('incidentContainer');
-    container.innerHTML = `
-      <div class="incident-card">
-        <div class="incident-header">
-          <strong>${data.error_file || 'unknown_file'} : Line ${data.error_line || '?'}</strong>
-          <span style="font-size: 12px; color: var(--text-muted);">${new Date(data.timestamp).toLocaleTimeString()}</span>
+  function renderReceiptModal(receipt) {
+    const container = document.getElementById('receipt-items-container');
+    container.innerHTML = '';
+    (receipt.items || []).forEach(item => {
+      const box = document.createElement('div');
+      box.style.background = 'var(--bg-card)';
+      box.style.padding = '12px';
+      box.style.borderRadius = '8px';
+      box.style.border = '1px solid var(--border-dim)';
+      box.innerHTML = `
+        <div style="font-weight: 700; color: var(--accent-blue); font-size: 13px;">${item.file} (lines ${item.line_start}-${item.line_end}) · ${item.estimated_tokens} tokens</div>
+        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+          <strong>Reasons:</strong>
+          <ul style="margin-left: 18px; margin-top: 2px;">
+            ${item.reasons.map(r => `<li>${r}</li>`).join('')}
+          </ul>
         </div>
-        <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
-          Command: <code>${data.command || 'custom-run'}</code> | Language: <strong>${data.language || 'auto'}</strong>
-        </div>
-        <div class="code-block" style="border-left: 3px solid var(--accent-rose);">${data.error_text}</div>
-        ${data.source_context ? `
-          <div style="margin-top: 10px; font-size: 12px; font-weight: 700; color: var(--text-muted);">SOURCE CONTEXT:</div>
-          <div class="code-block" style="border-left: 3px solid var(--accent-blue);">${data.source_context}</div>
-        ` : ''}
-      </div>
-    `;
+      `;
+      container.appendChild(box);
+    });
   }
 
-  function appendLog(source, text, type = "sys") {
-    const box = document.getElementById('consoleLogs');
-    const ts = new Date().toLocaleTimeString();
-    const div = document.createElement('div');
-    div.className = 'log-line';
-    div.innerHTML = `<span class="log-ts">[${ts}]</span> <strong style="color: var(--text-muted);">[${source}]</strong> <span class="log-${type}">${text}</span>`;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
+  function applyCurrentRepair() {
+    if (!currentIncident) return;
+    socket.send(JSON.stringify({
+      type: 'repair',
+      protocol_version: 3,
+      incident_id: currentIncident.incident_id,
+      project_id: currentIncident.project_id,
+      file: currentIncident.error_file,
+      force_apply: true
+    }));
   }
 
-  function clearConsole() {
-    document.getElementById('consoleLogs').innerHTML = '';
-  }
-
-  function triggerStagedDemo() {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        command: "demo-staged-bug",
-        error_file: "auth_service.py",
-        error_line: 42,
-        original_line: "if user.is_authenticated():",
-        error_text: "AttributeError: 'NoneType' object has no attribute 'is_authenticated'",
-        source_context: "38 | user = db.find_user(user_id)\n40 | print(f'Fetching token for {user_id}')\n>>> 42 | if user.is_authenticated():\n43 |     return user.token",
-        language: "python"
-      }));
-      appendLog("Client", "Dispatched Staged Demo Payload to paired ecosystem", "agent");
-    } else {
-      alert("Relay server is not connected.");
-    }
-  }
-
-  connect();
+  connectBridge();
 </script>
 </body>
 </html>

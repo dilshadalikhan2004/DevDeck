@@ -11,39 +11,43 @@ class ModelManager(private val context: Context) {
 
     fun getPredefinedModels(): List<ModelConfig> {
         val currentPath = getCurrentModelPath()
+        val gemmaPath = resolveModelLocation("gemma-2b-it-gpu.bin")
+        val qwenPath = resolveModelLocation("qwen2.5-coder-1.5b-gpu.bin")
+        val phiPath = resolveModelLocation("phi-3.5-mini-gpu.bin")
+
         return listOf(
             ModelConfig(
                 id = "gemma-2b",
                 displayName = "Gemma 2B IT",
                 description = "Lightweight general-purpose model optimized for mobile",
-                filePath = "/data/local/tmp/gemma-2b-it-gpu.bin",
+                filePath = gemmaPath,
                 sizeGB = 1.3f,
                 estimatedTPS = 18f,
                 specialty = "General debugging",
                 tier = ModelTier.FAST,
-                isActive = currentPath == "/data/local/tmp/gemma-2b-it-gpu.bin"
+                isActive = currentPath == gemmaPath
             ),
             ModelConfig(
                 id = "qwen-coder",
                 displayName = "Qwen2.5 Coder 1.5B",
                 description = "Code-specialized model with fast inference",
-                filePath = "/data/local/tmp/qwen2.5-coder-1.5b-gpu.bin",
+                filePath = qwenPath,
                 sizeGB = 0.9f,
                 estimatedTPS = 24f,
                 specialty = "Code repair specialist",
                 tier = ModelTier.FAST,
-                isActive = currentPath == "/data/local/tmp/qwen2.5-coder-1.5b-gpu.bin"
+                isActive = currentPath == qwenPath
             ),
             ModelConfig(
                 id = "phi-3.5",
                 displayName = "Phi-3.5 Mini",
                 description = "Advanced reasoning for complex errors",
-                filePath = "/data/local/tmp/phi-3.5-mini-gpu.bin",
+                filePath = phiPath,
                 sizeGB = 2.4f,
                 estimatedTPS = 11f,
                 specialty = "Complex logic bugs",
                 tier = ModelTier.ADVANCED,
-                isActive = currentPath == "/data/local/tmp/phi-3.5-mini-gpu.bin"
+                isActive = currentPath == phiPath
             ),
             ModelConfig(
                 id = "custom",
@@ -54,17 +58,25 @@ class ModelManager(private val context: Context) {
                 estimatedTPS = 0f,
                 specialty = "Unknown",
                 tier = ModelTier.FAST,
-                isActive = !listOf(
-                    "/data/local/tmp/gemma-2b-it-gpu.bin",
-                    "/data/local/tmp/qwen2.5-coder-1.5b-gpu.bin",
-                    "/data/local/tmp/phi-3.5-mini-gpu.bin"
-                ).contains(currentPath)
+                isActive = !listOf(gemmaPath, qwenPath, phiPath).contains(currentPath)
             )
         )
     }
 
+    private fun resolveModelLocation(fileName: String): String {
+        val internal = java.io.File(java.io.File(context.filesDir, "models"), fileName)
+        if (internal.exists()) return internal.absolutePath
+        val external = java.io.File(java.io.File(context.getExternalFilesDir(null), "models"), fileName)
+        if (external.exists()) return external.absolutePath
+        return "/data/local/tmp/$fileName"
+    }
+
     fun getCurrentModelPath(): String {
-        return prefs.getString("model_path", "/data/local/tmp/gemma-2b-it-gpu.bin")!!
+        val configured = prefs.getString("model_path", null)
+        if (!configured.isNullOrBlank() && java.io.File(configured).exists()) {
+            return configured
+        }
+        return resolveModelLocation("gemma-2b-it-gpu.bin")
     }
 
     fun setModelPath(path: String) {

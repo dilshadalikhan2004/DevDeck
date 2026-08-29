@@ -1,3 +1,7 @@
+"""DevDeck CLI — Transparent Repair Runtime for real codebases."""
+
+from __future__ import annotations
+
 import sys
 import subprocess
 import json
@@ -11,30 +15,32 @@ import uuid
 from pathlib import Path
 
 from bridge_security import canonical_project_root, sha256_file
-from repo_context import RepositoryIndex, build_evidence_pack
+from repo_context import ProjectBrain, build_evidence_pack
+from sandbox_verifier import SandboxVerifier
+from repair_memory import RepairMemory, AutonomyPolicy, AutonomyLevel
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
-_repository_indexes = {}
+_project_brains = {}
 
-async def send_error(error_data):
+
+async def send_event(payload: dict):
     uri = os.environ.get("DEVDECK_RELAY_URI", "ws://localhost:8765")
     try:
         async with websockets.connect(uri) as websocket:
-            await websocket.send(json.dumps(error_data))
-            print(f"\n[DevDeck] -> Error incident + source context dispatched to paired device ({uri}).")
+            await websocket.send(json.dumps(payload))
     except Exception as e:
-        print(f"\n[DevDeck] Warning: Could not connect to relay server ({uri}): {e}")
+        # Fail silently if relay server is not running in background
+        pass
 
-def calculate_sha256(file_path):
-    if not file_path or not os.path.exists(file_path):
-        return None
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
 
-def detect_language(file_path):
+def detect_language(file_path: str | None) -> str:
     if not file_path:
         return "unknown"
     ext = os.path.splitext(file_path)[1].lower()
@@ -51,25 +57,19 @@ def detect_language(file_path):
         ".cpp": "cpp",
         ".c": "c",
         ".rb": "ruby",
-        ".php": "php"
+        ".php": "php",
     }
     return mapping.get(ext, "auto")
 
-def get_error_metadata(stderr):
-    # Regex patterns for Python, JS/TS, Java/Kotlin, Rust, Go, C/C++
+
+def get_error_metadata(stderr: str):
     patterns = [
-        # Python traceback: File "path", line 123
         r'File "(.*?)", line (\d+)',
-        # JS / TS / Node stack: at ... (path:123:45) or at path:123:45
         r'at (?:[^\(\n]+\()?([a-zA-Z0-9_\-\./\\]+\.(?:js|ts|jsx|tsx|mjs)):(\d+)',
-        # Kotlin / Java compile: e: path: (123, 45) or path:123:45: error
         r'([a-zA-Z0-9_\-\./\\]+\.(?:kt|java|cpp|c|rs|go)):(?:(?:\()?(\d+)(?:,\s*\d+\))?|(\d+):\d+)',
-        # Java runtime stack: at pkg.Class(Class.java:123)
         r'\(([a-zA-Z0-9_\-]+\.(?:java|kt)):(\d+)\)',
-        # Rust panic: --> src/main.rs:123:45 or panicked at '...', src/main.rs:123:45
         r'(?:-->|panicked at .*?,\s*)([a-zA-Z0-9_\-\./\\]+\.rs):(\d+)',
-        # Generic path:line
-        r'([a-zA-Z0-9_\-\./\\]+\.(?:py|js|ts|kt|java|cpp|c|rs|go|rb|php)):(\d+)'
+        r'([a-zA-Z0-9_\-\./\\]+\.(?:py|js|ts|kt|java|cpp|c|rs|go|rb|php)):(\d+)',
     ]
 
     found_file = None
@@ -83,7 +83,6 @@ def get_error_metadata(stderr):
                 groups = [g for g in match.groups() if g is not None]
                 if len(groups) >= 2:
                     candidate_file = groups[0]
-                    # Find first numeric group as line
                     candidate_line = next((int(g) for g in groups[1:] if g.isdigit()), None)
                     if candidate_line is not None:
                         found_file = candidate_file
@@ -116,7 +115,8 @@ def get_error_metadata(stderr):
 
     return context, found_file, found_line, original_line
 
-def clean_stderr(stderr):
+
+def clean_stderr(stderr: str) -> str:
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     clean_text = ansi_escape.sub('', stderr)
     lines = clean_text.splitlines()
@@ -125,7 +125,14 @@ def clean_stderr(stderr):
     return "\n".join(lines)
 
 
-def build_incident_payload(command, stderr, project_root=None):
+def get_brain(project_root: str | Path) -> ProjectBrain:
+    path = Path(project_root).resolve()
+    if path not in _project_brains:
+        _project_brains[path] = ProjectBrain.build(path)
+    return _project_brains[path]
+
+
+def build_incident_payload(command: str, stderr: str, project_root: str | Path | None = None) -> dict:
     source_context, file_path, line_num, original_line = get_error_metadata(stderr)
     project = canonical_project_root(project_root or Path.cwd())
     source_path = Path(file_path).resolve() if file_path and Path(file_path).exists() else None
@@ -136,22 +143,22 @@ def build_incident_payload(command, stderr, project_root=None):
         expected_sha256 = sha256_file(source_path)
 
     context_budget = int(os.environ.get("DEVDECK_CONTEXT_TOKEN_BUDGET", "650"))
-    index = _repository_indexes.get(project.path)
-    if index is None:
-        index = RepositoryIndex.build(project.path)
-        _repository_indexes[project.path] = index
+    brain = get_brain(project.path)
     evidence = build_evidence_pack(
-        index=index,
+        index=brain,
         error_text=clean_stderr(stderr),
         target_file=relative_file,
         target_line=line_num,
         token_budget=context_budget,
     )
 
+    incident_id = str(uuid.uuid4())
+    receipt_dict = evidence.receipt.to_dict() if evidence.receipt else None
+
     return {
         "type": "incident",
         "protocol_version": 2,
-        "incident_id": str(uuid.uuid4()),
+        "incident_id": incident_id,
         "project_id": project.project_id,
         "project_root": str(project.path),
         "timestamp": datetime.now().isoformat(),
@@ -166,11 +173,43 @@ def build_incident_payload(command, stderr, project_root=None):
         "repository_context": evidence.text,
         "repository_context_tokens": evidence.estimated_tokens,
         "allowed_symbols": sorted(evidence.allowed_symbols),
+        "context_receipt": receipt_dict,
     }
 
-def run_command(command):
-    print(f"\n[DevDeck Active Watch] Executing: {command}")
-    print("=" * 60)
+
+def scan_repository(project_root: str | Path | None = None) -> None:
+    root = Path(project_root or Path.cwd()).resolve()
+    print(f"\n🧠 [DevDeck] Scanning repository to build local Project Brain: {root}")
+    print("=" * 65)
+    brain = ProjectBrain.build(root)
+    _project_brains[root] = brain
+    summary = brain.summary()
+    
+    print(f"● Project Ready")
+    print(f"  Indexed {summary['files_indexed']} source files · {summary['symbols_indexed']} symbols · {summary['tests_discovered']} tests discovered")
+    if summary['tests']:
+        print(f"  Sample Tests: {', '.join(summary['tests'][:3])}")
+    print("=" * 65)
+
+    # Broadcast brain ready event to relay server
+    asyncio.run(send_event({
+        "type": "brain_ready",
+        "timestamp": datetime.now().isoformat(),
+        "project_root": str(root),
+        "files_indexed": summary["files_indexed"],
+        "symbols_indexed": summary["symbols_indexed"],
+        "tests_discovered": summary["tests_discovered"],
+        "tests": summary["tests"],
+    }))
+
+
+def run_command_with_watch(command: str) -> int:
+    root = Path.cwd()
+    memory = RepairMemory(root)
+    policy = memory.get_policy()
+
+    print(f"\n[DevDeck Active Watch] Executing: {command} (Autonomy Policy: {policy.level.value})")
+    print("=" * 65)
     process = subprocess.Popen(
         command,
         shell=True,
@@ -182,58 +221,135 @@ def run_command(command):
     _, stderr = process.communicate()
 
     if process.returncode != 0:
-        print("=" * 60)
-        print("❌ [DevDeck] Command failed (Exit Code: {}). Analyzing incident...".format(process.returncode))
-        error_payload = build_incident_payload(command, stderr)
+        print("=" * 65)
+        print(f"❌ [DevDeck] Command failed (Exit Code: {process.returncode}). Analyzing incident...")
+        payload = build_incident_payload(command, stderr, root)
 
-        print(f"📍 Target: {error_payload['error_file']}:{error_payload['error_line']} [{error_payload['language']}]")
-        print(f"🆔 Incident ID: {error_payload['incident_id']}")
-        if error_payload["original_line"]:
-            print(f"🔍 Line Content: {error_payload['original_line']}")
+        print(f"\n● Failure captured")
+        print(f"  {command} failed at {payload['error_file']}:{payload['error_line']}")
 
-        asyncio.run(send_error(error_payload))
+        receipt = payload.get("context_receipt")
+        if receipt:
+            print(f"\n● Evidence selected")
+            print(f"  {receipt['total_files']} files · {receipt['total_symbols']} symbols · {receipt['total_tokens']} context tokens")
+            print("  Selected Context Files:")
+            for item in receipt.get("items", []):
+                reasons_str = "; ".join(item.get("reasons", []))
+                print(f"    - {item['file']}:{item['line_start']}-{item['line_end']} [{reasons_str}]")
+
+        print(f"\n● Dispatched incident to paired clients (Android / Web Console)...")
+        asyncio.run(send_event(payload))
+
+        # Log incident in memory
+        memory.log_incident(
+            incident_id=payload["incident_id"],
+            command=command,
+            error_file=payload.get("error_file") or "unknown",
+            error_line=payload.get("error_line") or 0,
+            error_text=payload["error_text"],
+            context_receipt=receipt,
+            candidate_patch=None,
+            repair_proof=None,
+            trust_breakdown=None,
+            status="CAPTURED",
+        )
 
     return process.returncode
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python devdeck.py [run \"<command>\" | demo]")
+
+def replay_incident(incident_id: str) -> None:
+    root = Path.cwd()
+    memory = RepairMemory(root)
+    incident = memory.get_incident_by_id(incident_id)
+    if not incident:
+        print(f"❌ [DevDeck] Incident '{incident_id}' not found in audit memory.")
         sys.exit(1)
 
-    if sys.argv[1] == "demo":
-        print("[DevDeck] TRACE: Initializing Staged Demo Error...")
+    print(f"\n⏮️  [DevDeck Incident Replay] ID: {incident['incident_id']}")
+    print("=" * 65)
+    print(f"Timestamp: {incident.get('timestamp')}")
+    print(f"Command:   {incident.get('command')}")
+    print(f"Target:    {incident.get('error_file')}:{incident.get('error_line')}")
+    print(f"Status:    {incident.get('status')}")
+    
+    receipt = incident.get("context_receipt")
+    if receipt:
+        print(f"\nContext Receipt ({receipt.get('total_tokens')} tokens, {receipt.get('total_files')} files):")
+        for item in receipt.get("items", []):
+            print(f"  • {item.get('file')}: {', '.join(item.get('reasons', []))}")
+
+    patch = incident.get("candidate_patch")
+    if patch:
+        print(f"\nCandidate Patch ({patch.get('patch_type')}):")
+        print(patch.get("diff_text") or patch.get("repair_code"))
+
+    proof = incident.get("repair_proof")
+    if proof:
+        print(f"\nSandbox Verification Proof (Exit: {proof.get('exit_code')}, Duration: {proof.get('execution_duration_ms')}ms):")
+        print(f"  Passed: {proof.get('sandbox_passed')}")
+        if proof.get("sandbox_stdout"):
+            print(f"  Output:\n{proof.get('sandbox_stdout')[:300]}")
+
+    trust = incident.get("trust_breakdown")
+    if trust:
+        print(f"\nTrust Meter: {trust.get('total_score')}% [{trust.get('trust_level')}]")
+        for reason in trust.get("reasons", []):
+            print(f"  ✓ {reason}")
+    print("=" * 65)
+
+
+def set_or_get_policy(arg: str | None = None) -> None:
+    root = Path.cwd()
+    memory = RepairMemory(root)
+    if arg is None:
+        policy = memory.get_policy()
+        print(f"[DevDeck Autonomy Policy] Current level: {policy.level.value}")
+        print("Available options: suggest_only, approve_each, auto_apply_verified_low_risk, full_autonomous")
+    else:
+        new_pol = AutonomyPolicy.from_string(arg)
+        memory.set_policy(new_pol.level)
+        print(f"✅ [DevDeck Autonomy Policy] Updated to: {new_pol.level.value}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("DevDeck Transparent Repair Runtime")
+        print("Usage:")
+        print("  python devdeck.py scan")
+        print("  python devdeck.py run \"<command>\"")
+        print("  python devdeck.py replay <incident_id>")
+        print("  python devdeck.py policy [suggest | approve | low-risk | auto]")
+        sys.exit(1)
+
+    command_type = sys.argv[1].lower()
+    if command_type == "scan":
+        scan_repository()
+        sys.exit(0)
+    elif command_type == "run":
+        if len(sys.argv) < 3:
+            print("Usage: python devdeck.py run \"<command>\"")
+            sys.exit(1)
+        sys.exit(run_command_with_watch(sys.argv[2]))
+    elif command_type == "replay":
+        if len(sys.argv) < 3:
+            print("Usage: python devdeck.py replay <incident_id>")
+            sys.exit(1)
+        replay_incident(sys.argv[2])
+        sys.exit(0)
+    elif command_type == "policy":
+        arg = sys.argv[2] if len(sys.argv) > 2 else None
+        set_or_get_policy(arg)
+        sys.exit(0)
+    elif command_type == "demo":
+        # Run demo
         demo_trace = """Traceback (most recent call last):
   File "auth_service.py", line 42, in get_user_token
     if user.is_authenticated():
 AttributeError: 'NoneType' object has no attribute 'is_authenticated'"""
-
-        demo_context = """       38 |     user = db.find_user(user_id)
-       39 |     # Logic to fetch token
-       40 |     print(f"Fetching token for {user_id}")
->>>    42 |     if user.is_authenticated():
-       43 |         return user.token
-       44 |     return None"""
-
-        payload = {
-            "type": "incident",
-            "protocol_version": 2,
-            "incident_id": str(uuid.uuid4()),
-            "project_id": "demo-project",
-            "timestamp": datetime.now().isoformat(),
-            "command": "demo-staged-bug",
-            "error_text": demo_trace,
-            "source_context": demo_context,
-            "error_file": "auth_service.py",
-            "error_line": 42,
-            "original_line": "if user.is_authenticated():",
-            "language": "python"
-        }
-        asyncio.run(send_error(payload))
+        payload = build_incident_payload("python auth_service.py", demo_trace)
+        print("Dispatched demo incident...")
+        asyncio.run(send_event(payload))
         sys.exit(0)
-
-    if len(sys.argv) < 3 or sys.argv[1] != "run":
-        print("Usage: python devdeck.py run \"<command>\"")
-        sys.exit(1)
-
-    cmd = sys.argv[2]
-    sys.exit(run_command(cmd))
+    else:
+        # Default fallback to run
+        sys.exit(run_command_with_watch(" ".join(sys.argv[1:])))

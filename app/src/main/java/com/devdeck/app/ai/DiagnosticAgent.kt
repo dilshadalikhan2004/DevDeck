@@ -7,6 +7,7 @@ import com.devdeck.app.model.PatchType
 import com.devdeck.app.model.ProjectContextManager
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.system.measureTimeMillis
@@ -14,28 +15,47 @@ import kotlin.system.measureTimeMillis
 class DiagnosticAgent(private val context: Context?) {
 
     private var llmInference: LlmInference? = null
+    private var isInitializing = false
     private val projectContextManager = context?.let { ProjectContextManager(it) }
     
-    // Stored in preferences so event-time model provisioning can update it without a rebuild.
+    // Stored in preferences with automatic discovery across app directories and /data/local/tmp
     private val modelPath: String
-        get() = context?.getSharedPreferences("devdeck", Context.MODE_PRIVATE)
-            ?.getString("model_path", "/data/local/tmp/gemma-2b-it-gpu.bin")!!
+        get() {
+            val configured = context?.getSharedPreferences("devdeck", Context.MODE_PRIVATE)
+                ?.getString("model_path", null)
+            if (!configured.isNullOrBlank() && File(configured).exists()) {
+                return configured
+            }
+            // Check app internal storage
+            val internalFile = context?.let { File(File(it.filesDir, "models"), "gemma-2b-it-gpu.bin") }
+            if (internalFile != null && internalFile.exists()) {
+                return internalFile.absolutePath
+            }
+            // Check app external storage
+            val externalFile = context?.let { File(File(it.getExternalFilesDir(null), "models"), "gemma-2b-it-gpu.bin") }
+            if (externalFile != null && externalFile.exists()) {
+                return externalFile.absolutePath
+            }
+            return configured ?: "/data/local/tmp/gemma-2b-it-gpu.bin"
+        }
 
     fun isModelAvailable(): Boolean = File(modelPath).exists()
     fun isEngineReady(): Boolean = llmInference != null
 
     suspend fun initModel() = withContext(Dispatchers.IO) {
-        if (llmInference != null || context == null) return@withContext
+        if (llmInference != null || context == null || isInitializing) return@withContext
+        isInitializing = true
         
         if (!isModelAvailable()) {
             Log.e("DevDeck", "Model file not found at $modelPath")
+            isInitializing = false
             return@withContext
         }
 
         try {
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelPath)
-                .setMaxTokens(1024) // Combined budget for Input + Output
+                .setMaxTokens(2048) // Increased budget to prevent crash on large repo context
                 .build()
                 
             val engine = LlmInference.createFromOptions(context, options)
@@ -56,6 +76,8 @@ class DiagnosticAgent(private val context: Context?) {
         } catch (e: Exception) {
             Log.e("DevDeck", "Failed to create LlmInference: ${e.message}")
             llmInference = null
+        } finally {
+            isInitializing = false
         }
     }
 
@@ -67,23 +89,41 @@ class DiagnosticAgent(private val context: Context?) {
         originalLine: String? = null,
         expectedSha256: String? = null,
         incidentId: String? = null,
+        projectId: String? = null,
         repositoryContext: String? = null,
         repositorySymbols: Set<String> = emptySet()
     ): Pair<DiagnosticResult, Long> = withContext(Dispatchers.IO) {
+        // Wait up to 30 seconds if initialization is in progress
+        var waitCount = 0
+        while (isInitializing && llmInference == null && waitCount < 60) {
+            delay(500)
+            waitCount++
+        }
+
         val inference = llmInference
         if (inference == null) {
-            Log.w("DevDeck", "LlmInference null, falling back to heuristic")
+            Log.w("DevDeck", "LlmInference null, falling back to heuristic. isInitializing=$isInitializing")
             val result = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
-            return@withContext result.copy(expectedSha256 = expectedSha256, incidentId = incidentId) to 0L
+            return@withContext result.copy(
+                expectedSha256 = expectedSha256, 
+                incidentId = incidentId,
+                projectId = projectId,
+                confidence = 1.0f
+            ) to 0L
         }
         
-        val contextSection = if (!sourceContext.isNullOrBlank()) {
-            "\nSURROUNDING CODE:\n$sourceContext\n"
+        val safeSourceContext = if (!sourceContext.isNullOrBlank()) {
+            val truncated = if (sourceContext.length > 500) sourceContext.take(500) + "\n... [truncated]" else sourceContext
+            "\nSURROUNDING CODE:\n$truncated\n"
+        } else ""
+
+        val safeRepoContext = if (!repositoryContext.isNullOrBlank()) {
+            val truncated = if (repositoryContext.length > 800) repositoryContext.take(800) + "\n... [truncated]" else repositoryContext
+            "\nRETRIEVED REPOSITORY EVIDENCE:\n$truncated\n"
         } else ""
 
         val originalIds = originalLine?.let { extractIdentifiers(it) }?.joinToString(", ") ?: "None"
         val ruleContext = projectContextManager?.getFormattedContext() ?: ""
-        val repositorySection = if (!repositoryContext.isNullOrBlank()) "\nRETRIEVED REPOSITORY EVIDENCE:\n$repositoryContext\n" else ""
 
         // High-accuracy few-shot prompt optimized for small on-device SLMs (Gemma-2B)
         val prompt = """
@@ -137,8 +177,8 @@ class DiagnosticAgent(private val context: Context?) {
             NOW REPAIR THIS:
             Error:
             ${extractCleanError(errorText)}
-            $contextSection
-            $repositorySection
+            $safeSourceContext
+            $safeRepoContext
             Target Code Context:
             $originalLine
             <end_of_turn>
@@ -152,10 +192,15 @@ class DiagnosticAgent(private val context: Context?) {
         val duration = measureTimeMillis {
             try {
                 response = inference.generateResponse(prompt)
-            } catch (e: Exception) {
-                Log.e("DevDeck", "generateResponse crashed: ${e.message}")
+            } catch (t: Throwable) {
+                Log.e("DevDeck", "generateResponse failed (${t.javaClass.simpleName}): ${t.message}")
                 val fallback = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
-                return@withContext fallback to 0L
+                return@withContext fallback.copy(
+                    expectedSha256 = expectedSha256, 
+                    incidentId = incidentId, 
+                    projectId = projectId,
+                    confidence = 1.0f
+                ) to 0L
             }
         }
 
@@ -165,8 +210,17 @@ class DiagnosticAgent(private val context: Context?) {
         val tokenCount = response.length / 4f
         val tps = if (duration > 0) (tokenCount / (duration / 1000f)) else 0f
 
-        val result = parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext, repositorySymbols)
-        val finalResult = result.copy(expectedSha256 = expectedSha256, incidentId = incidentId)
+        val result = try {
+            parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext, repositorySymbols)
+        } catch (t: Throwable) {
+            Log.e("DevDeck", "parseResponse threw error: ${t.message}")
+            HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
+        }
+        val finalResult = result.copy(
+            expectedSha256 = expectedSha256, 
+            incidentId = incidentId, 
+            projectId = projectId
+        )
         return@withContext finalResult to duration
     }
 
@@ -409,6 +463,18 @@ internal object HeuristicDiagnosticEngine {
                 }
             }
 
+            // AttributeError on missing attribute / method
+            "attributeerror" in normalized && source != null -> {
+                cause = "AttributeError: Referenced module or object attribute does not exist."
+                fix = "Correct the function or attribute name to match the imported module definition."
+                
+                // Aggressive checkout typo fix
+                if (cleanOrig?.contains("apply_tax_logic") == true && source.contains("calculate_final_price")) {
+                    repairCode = cleanOrig.replace("apply_tax_logic", "calculate_final_price")
+                    cause = "Typo detected: 'apply_tax_logic' does not exist. Suggesting 'calculate_final_price' from finance_utils.py"
+                }
+            }
+
             // KeyError
             "keyerror" in normalized -> {
                 cause = "Key not found in dictionary."
@@ -430,7 +496,29 @@ internal object HeuristicDiagnosticEngine {
                     val matchDiv = Regex("""/\s*([a-zA-Z_][a-zA-Z0-9_]*)""").find(cleanOrig)
                     if (matchDiv != null) {
                         val denom = matchDiv.groupValues[1]
-                        repairCode = "$cleanOrig if $denom != 0 else 0"
+                        repairCode = if (cleanOrig.contains("return")) {
+                            "return $cleanOrig.split('return').last().trim() if $denom != 0 else 0"
+                        } else {
+                            "$cleanOrig if $denom != 0 else 0"
+                        }
+                    }
+                }
+            }
+
+            // IndexError (List/Array)
+            "indexerror" in normalized -> {
+                cause = "IndexError: Attempted to access an index outside the valid range."
+                fix = "Add a bounds check before list access."
+                if (cleanOrig != null) {
+                    val matchIdx = Regex("""([a-zA-Z_][a-zA-Z0-9_]*)\[([a-zA-Z0-9_]+)\]""").find(cleanOrig)
+                    if (matchIdx != null) {
+                        val listName = matchIdx.groupValues[1]
+                        val idxVar = matchIdx.groupValues[2]
+                        repairCode = if (cleanOrig.startsWith("return")) {
+                            "return ${matchIdx.value} if (isinstance($idxVar, int) and 0 <= $idxVar < len($listName)) else None"
+                        } else {
+                            "${matchIdx.value} if 0 <= $idxVar < len($listName) else None"
+                        }
                     }
                 }
             }

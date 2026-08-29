@@ -11,4 +11,11 @@ captures/
 __pycache__/
 *.pyc
 *.bak
+*.tmp
+.devdeck/snapshots/
+.devdeck/sandbox/
+.devdeck/pairing_state.json
+*.devdeck-snapshot
+crash_log.txt
 .worktrees/
+

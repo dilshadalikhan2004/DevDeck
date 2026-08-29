@@ -8,12 +8,13 @@ from pathlib import Path
 from datetime import datetime
 from sandbox_runner import SandboxRunner
 
+
 class PatchManager:
     def __init__(self, backup_dir=".devdeck/snapshots"):
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
-    def apply_repair(self, data, last_command, project_root=None):
+    def apply_repair(self, data, last_command=None, project_root=None):
         patch_type = data.get("patch_type", "single_line")
         file_path = data.get("file", "")
 
@@ -76,31 +77,38 @@ class PatchManager:
         new_code = data.get("code", "")
         expected_sha = data.get("expected_sha256")
 
-        if not line_num or not new_code:
+        if not line_num or not isinstance(new_code, str):
             return False, "Invalid single-line payload", file_path, None
 
         # 1. Integrity Check (SHA256)
         if expected_sha:
             current_sha = self._calculate_sha256(file_path)
             if current_sha != expected_sha:
-                return False, f"Integrity check failed: file changed since diagnosis.", file_path, None
+                return False, "Integrity check failed: file changed since diagnosis.", file_path, None
 
         # 2. Create Snapshot
         snapshot_id = self._create_snapshot(file_path)
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
 
             if not (1 <= line_num <= len(lines)):
                 self._restore_snapshot(file_path, snapshot_id)
-                return False, f"Line {line_num} out of range", file_path, snapshot_id
+                return False, f"Line {line_num} out of range (1..{len(lines)})", file_path, snapshot_id
 
             old_line = lines[line_num - 1]
             indent = old_line[:len(old_line) - len(old_line.lstrip())]
             lines[line_num - 1] = f"{indent}{new_code.strip()}\n"
 
-            with open(file_path, 'w', encoding='utf-8') as f:
+            # Check compile / syntax before writing
+            full_text = "".join(lines)
+            ok, err = self.dry_run_compile_check(file_path, full_text)
+            if not ok:
+                self._restore_snapshot(file_path, snapshot_id)
+                return False, f"Syntax check failed: {err}", file_path, snapshot_id
+
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.writelines(lines)
 
             # 3. Verify with Rerun
@@ -119,19 +127,19 @@ class PatchManager:
         expected_sha = data.get("expected_sha256")
 
         if not diff_text:
-            return False, "No diff_text", file_path, None
+            return False, "No diff_text provided", file_path, None
 
         # 1. Integrity Check
         if expected_sha:
             current_sha = self._calculate_sha256(file_path)
             if current_sha != expected_sha:
-                return False, f"Integrity check failed: file changed since diagnosis.", file_path, None
+                return False, "Integrity check failed: file changed since diagnosis.", file_path, None
 
         # 2. Create Snapshot
         snapshot_id = self._create_snapshot(file_path)
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 original = f.read()
 
             patched = self._apply_unified_diff(original, diff_text)
@@ -144,7 +152,7 @@ class PatchManager:
                 self._restore_snapshot(file_path, snapshot_id)
                 return False, f"Syntax check failed: {err}", file_path, snapshot_id
 
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(patched)
 
             if last_command:
@@ -179,46 +187,68 @@ class PatchManager:
         else:
             print(f"[Snapshot] Warning: No snapshot found to restore {file_path}")
 
-    def _apply_unified_diff(self, original: str, diff_text: str):
-        """Pure Python unified diff applier for Windows compatibility"""
+    def _apply_unified_diff(self, original: str, diff_text: str) -> str | None:
+        """Robust pure-Python unified diff applier with multi-hunk support."""
+        if not diff_text.strip():
+            return original
+
+        # Normalize line endings
+        original_has_crlf = "\r\n" in original
         lines = original.splitlines(keepends=True)
         diff_lines = diff_text.splitlines()
 
+        # Find all hunk headers
+        hunk_header_re = re.compile(r"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@")
+
         result = []
-        i = 0 # original lines index
-        j = 0 # diff lines index
+        i = 0  # original line pointer (0-indexed)
+        j = 0  # diff lines pointer
+
+        # Skip prelude comments / file header lines until first @@
+        while j < len(diff_lines) and not diff_lines[j].startswith("@@"):
+            j += 1
+
+        if j >= len(diff_lines):
+            return None
 
         while j < len(diff_lines):
             line = diff_lines[j]
-            if line.startswith('@@'):
-                match = re.match(r'@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@', line)
-                if not match:
-                    j += 1
-                    continue
-
-                old_start = int(match.group(1))
-                target_idx = old_start - 1
-
-                while i < target_idx:
-                    result.append(lines[i])
-                    i += 1
-
+            match = hunk_header_re.match(line)
+            if not match:
                 j += 1
-                while j < len(diff_lines) and not diff_lines[j].startswith('@@'):
-                    dl = diff_lines[j]
-                    if dl.startswith(' '):
+                continue
+
+            old_start = int(match.group(1))
+            target_idx = max(0, old_start - 1)
+
+            # Copy unchanged original lines leading up to this hunk
+            while i < target_idx and i < len(lines):
+                result.append(lines[i])
+                i += 1
+
+            j += 1
+            while j < len(diff_lines) and not diff_lines[j].startswith("@@"):
+                dl = diff_lines[j]
+                if not dl:
+                    # Empty context line
+                    if i < len(lines):
+                        result.append(lines[i])
+                        i += 1
+                elif dl.startswith(" "):
+                    if i < len(lines):
+                        result.append(lines[i])
+                        i += 1
+                elif dl.startswith("-"):
+                    if not dl.startswith("---"):
                         if i < len(lines):
-                            result.append(lines[i])
-                            i += 1
-                    elif dl.startswith('-'):
-                        if i < len(lines):
-                            i += 1
-                    elif dl.startswith('+'):
-                        result.append(dl[1:] + '\n')
-                    j += 1
-            else:
+                            i += 1  # Skip removed line from original
+                elif dl.startswith("+"):
+                    if not dl.startswith("+++"):
+                        new_content = dl[1:] + ("\r\n" if original_has_crlf else "\n")
+                        result.append(new_content)
                 j += 1
 
+        # Copy any remaining original lines after the last hunk
         while i < len(lines):
             result.append(lines[i])
             i += 1
@@ -227,43 +257,66 @@ class PatchManager:
 
     def dry_run_compile_check(self, file_path: str, content: str):
         ext = os.path.splitext(file_path)[1].lower()
-        if ext == '.py':
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as tmp:
+        if ext == ".py":
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
                 result = subprocess.run(
-                    ['python', '-m', 'py_compile', tmp_path],
+                    ["python", "-m", "py_compile", tmp_path],
                     capture_output=True,
                     text=True,
-                    timeout=3
+                    timeout=5
                 )
                 return (result.returncode == 0, result.stderr if result.returncode != 0 else "")
+            except Exception as e:
+                return False, str(e)
             finally:
                 if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-        elif ext in ['.js', '.ts', '.kt', '.java']:
-            if content.count('{') != content.count('}'):
-                return False, "Unmatched braces"
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+        elif ext in [".js", ".ts", ".kt", ".java"]:
+            if content.count("{") != content.count("}"):
+                return False, "Unmatched braces in source"
+            if content.count("(") != content.count(")"):
+                return False, "Unmatched parentheses in source"
             return True, ""
         return True, ""
 
     def rerun_command(self, command: str) -> bool:
-        print(f"[PatchManager] Rerunning: {command}")
+        print(f"[PatchManager] Rerunning command: {command}")
         try:
             result = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=12
+                timeout=15
             )
             success = result.returncode == 0
-            print(f"[PatchManager] Rerun {'SUCCESS' if success else 'FAILED'}")
+            print(f"[PatchManager] Rerun {'SUCCESS (Exit 0)' if success else f'FAILED (Exit {result.returncode})'}")
             return success
         except subprocess.TimeoutExpired:
-            print("[PatchManager] Rerun TIMEOUT")
+            print("[PatchManager] Rerun TIMEOUT (>15s)")
             return False
         except Exception as e:
             print(f"[PatchManager] Rerun error: {e}")
             return False
+
+
+_pm = PatchManager()
+
+
+def _apply_unified_diff(original: str, diff_text: str) -> str:
+    return _pm._apply_unified_diff(original, diff_text)
+
+
+def _dry_run_syntax_check(target_path: Path | str) -> tuple[bool, str]:
+    path = Path(target_path)
+    if not path.is_file():
+        return True, ""
+    content = path.read_text(encoding="utf-8", errors="replace")
+    return _pm.dry_run_compile_check(str(path), content)
+

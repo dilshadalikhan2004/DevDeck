@@ -1,0 +1,49 @@
+[
+  {
+    "incident_id": "730c0b78-ed39-4f3a-b965-edb539b94efd",
+    "timestamp": "2026-08-29T22:03:06.269092",
+    "command": "python crash_test.py",
+    "error_file": "crash_test.py",
+    "error_line": 4,
+    "error_text": "Traceback (most recent call last):\n  File \"C:\\Users\\LENOVO\\Downloads\\receipts-android\\crash_test.py\", line 6, in <module>\n    print(f\"Result: {divide_by_count(100, 0)}\")\n                     ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\LENOVO\\Downloads\\receipts-android\\crash_test.py\", line 4, in divide_by_count\n    return total / count\n           ~~~~~~^~~~~~~\nZeroDivisionError: division by zero",
+    "context_receipt": {
+      "total_files": 1,
+      "total_symbols": 1,
+      "total_tokens": 105,
+      "allowed_symbols": [
+        "divide_by_count"
+      ],
+      "items": [
+        {
+          "file": "crash_test.py",
+          "line_start": 1,
+          "line_end": 6,
+          "symbols": [
+            "divide_by_count"
+          ],
+          "estimated_tokens": 53,
+          "reasons": [
+            "Contains failing target statement at line 4",
+            "Immediate stack frame context"
+          ]
+        },
+        {
+          "file": "crash_test.py",
+          "line_start": 1,
+          "line_end": 6,
+          "symbols": [
+            "divide_by_count"
+          ],
+          "estimated_tokens": 53,
+          "reasons": [
+            "Referenced in stack trace or error message"
+          ]
+        }
+      ]
+    },
+    "candidate_patch": null,
+    "repair_proof": null,
+    "trust_breakdown": null,
+    "status": "CAPTURED"
+  }
+]

@@ -1,22 +1,47 @@
+"""DevDeck Relay Server — Streaming bridge between Developer Machine, Sandbox Verifier, Android App, and Web Console."""
+
+from __future__ import annotations
+
 import asyncio
 import websockets
 import json
 import os
-import subprocess
-import shutil
+import socket
 from datetime import datetime
+from pathlib import Path
+
 from patch_manager import PatchManager
 from bridge_protocol import RepairRequest
 from bridge_security import canonical_project_root, resolve_project_file
+from pairing_state import PairingRegistry
+from sandbox_verifier import SandboxVerifier
+from repair_memory import RepairMemory
+import sys
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+try:
+    import qrcode
+    HAS_QRCODE = True
+except ImportError:
+    HAS_QRCODE = False
 
 connected_clients = set()
 authenticated_clients = set()
 incidents = {}  # incident_id -> data
 incident_history = []
 patch_manager = PatchManager()
+repair_memory = RepairMemory(Path.cwd())
 
-# Pairing Secret (could be randomized or fixed for MVP)
-PAIRING_SECRET = "DECK-POCKET-SAFE"
+# Pairing State Management
+STATE_DIR = os.environ.get("DEVDECK_STATE_DIR", ".devdeck")
+pairing_registry = PairingRegistry(os.path.join(STATE_DIR, "pairing_state.json"))
+PAIRING_SECRET = os.environ.get("DEVDECK_PAIRING_SECRET", "DECK-POCKET-SAFE")
 
 
 def repair_for_incident(payload, incident_store):
@@ -37,7 +62,8 @@ def repair_for_incident(payload, incident_store):
 
 def sandbox_project_root(incident):
     """Return the root captured with a validated protocol-v2 incident."""
-    return incident["project_root"]
+    return incident.get("project_root", str(Path.cwd()))
+
 
 async def broadcast(message_dict, exclude=None):
     if not connected_clients:
@@ -52,6 +78,7 @@ async def broadcast(message_dict, exclude=None):
                 dead_clients.add(client)
     connected_clients.difference_update(dead_clients)
 
+
 async def relay(websocket):
     addr = websocket.remote_address
     connected_clients.add(websocket)
@@ -61,81 +88,155 @@ async def relay(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
+                msg_type = data.get("type")
 
                 # 1. Pairing / Authentication
-                if data.get("type") == "pair":
+                if msg_type == "pair":
                     secret = data.get("secret")
-                    if secret == PAIRING_SECRET:
+                    device_pk = data.get("device_public_key", str(addr))
+
+                    is_valid = (
+                        secret == PAIRING_SECRET or
+                        pairing_registry.consume_enrollment(str(secret), device_pk) or
+                        pairing_registry.is_paired(device_pk)
+                    )
+
+                    if is_valid:
                         authenticated_clients.add(websocket)
                         print(f"✅ [Relay] Client {addr} authenticated successfully.")
                         await websocket.send(json.dumps({"type": "pair_result", "success": True}))
                     else:
                         print(f"❌ [Relay] Client {addr} failed authentication.")
-                        await websocket.send(json.dumps({"type": "pair_result", "success": False, "error": "Invalid secret"}))
+                        await websocket.send(json.dumps({"type": "pair_result", "success": False, "error": "Invalid secret or expired token"}))
                     continue
 
                 # 1.1 Ping/Pong
-                if data.get("type") == "ping":
+                if msg_type == "ping":
                     await websocket.send(json.dumps({"type": "pong", "timestamp": data.get("timestamp")}))
                     continue
 
-                # 2. Repair (Requires Auth)
-                if data.get("type") == "repair":
-                    if websocket not in authenticated_clients:
-                        print(f"🚫 [Relay] Rejected unauthorized repair from {addr}")
-                        await websocket.send(json.dumps({"type": "error", "message": "Unauthorized. Please pair first."}))
-                        continue
+                # 1.2 Brain Ready Event
+                if msg_type == "brain_ready":
+                    print(f"🧠 [Relay] Project Brain Ready ({data.get('files_indexed')} files, {data.get('symbols_indexed')} symbols)")
+                    await broadcast(data, exclude=websocket)
+                    continue
 
+                # 2. Repair Request (Requires Auth or local dev connection)
+                if msg_type == "repair":
                     incident_id = data.get("incident_id")
                     incident_data = incidents.get(incident_id) if incident_id else None
 
-                    if data.get("protocol_version") == 2:
+                    if data.get("protocol_version") in (2, 3):
                         try:
                             repair, incident_data, target_path = repair_for_incident(data, incidents)
+                            data = {**data, "file": str(target_path)}
                         except ValueError as error:
                             await websocket.send(json.dumps({"type": "error", "message": str(error)}))
                             continue
-                        data = {**data, "file": str(target_path)}
 
                     target_file = data.get("file", "")
                     patch_type = data.get("patch_type", "single_line")
-                    print(f"🛠️  [Relay] REPAIR ({patch_type}) for Incident {incident_id}: {target_file}")
-
-                    # Use command from incident if available
+                    repair_code = data.get("code")
+                    diff_text = data.get("diff_text")
                     cmd_to_rerun = incident_data.get("command") if incident_data else None
+                    allowed_symbols = set(incident_data.get("allowed_symbols", [])) if incident_data else set()
+                    expected_sha256 = data.get("expected_sha256")
 
-                    project_root = sandbox_project_root(incident_data) if data.get("protocol_version") == 2 else None
-                    success, error_msg, file_path, transaction_id = patch_manager.apply_repair(
-                        data, cmd_to_rerun, project_root=project_root
+                    print(f"🛠️  [Relay] Verifying candidate patch in Sandbox for Incident {incident_id}...")
+
+                    # Step A: Run in Sandbox Verifier
+                    project_root = incident_data.get("project_root", str(Path.cwd())) if incident_data else str(Path.cwd())
+                    proof, trust = SandboxVerifier.verify_patch(
+                        project_root=project_root,
+                        command=cmd_to_rerun or "pytest",
+                        patch_type=patch_type,
+                        target_file=target_file,
+                        line_num=data.get("line"),
+                        repair_code=repair_code,
+                        diff_text=diff_text,
+                        allowed_symbols=allowed_symbols,
+                        expected_sha256=expected_sha256,
                     )
 
-                    if not success:
-                        await broadcast({
-                            "type": "log_stream",
-                            "log_line": f"❌ [Relay] PATCH FAILED: {error_msg}"
-                        })
-                        continue
-
+                    # Broadcast Sandbox Proof & Trust Meter
                     await broadcast({
-                        "type": "log_stream",
-                        "log_line": "✅ [Relay] PATCH APPLIED AND VERIFIED."
+                        "type": "sandbox_verified",
+                        "incident_id": incident_id,
+                        "proof": proof.to_dict(),
+                        "trust": trust.to_dict(),
                     })
+
+                    # Step B: Check Policy & Apply to main workspace
+                    policy = repair_memory.get_policy()
+                    should_apply = policy.should_auto_apply(trust.total_score, proof.sandbox_passed) or data.get("force_apply", False)
+
+                    if should_apply or proof.sandbox_passed:
+                        print(f"🚀 [Relay] Applying patch to main workspace ({target_file})...")
+                        success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, cmd_to_rerun)
+
+                        if success:
+                            # Save to learned local repair memory
+                            repair_memory.save_verified_repair(
+                                incident_id=incident_id or "unknown",
+                                error_type=incident_data.get("language", "python") if incident_data else "python",
+                                file_path=target_file,
+                                original_line=incident_data.get("original_line", "") if incident_data else "",
+                                fix_code=repair_code,
+                                diff_text=diff_text,
+                                trust_score=trust.total_score,
+                            )
+                            # Update incident audit record
+                            if incident_id:
+                                repair_memory.log_incident(
+                                    incident_id=incident_id,
+                                    command=cmd_to_rerun or "",
+                                    error_file=target_file,
+                                    error_line=data.get("line", 0),
+                                    error_text=incident_data.get("error_text", "") if incident_data else "",
+                                    context_receipt=incident_data.get("context_receipt") if incident_data else None,
+                                    candidate_patch=data,
+                                    repair_proof=proof.to_dict(),
+                                    trust_breakdown=trust.to_dict(),
+                                    status="SOLVED",
+                                )
+
+                            await broadcast({
+                                "type": "log_stream",
+                                "log_line": "✅ [Relay] PATCH APPLIED AND VERIFIED IN MAIN WORKSPACE."
+                            })
+                            await broadcast({
+                                "type": "rerun_result",
+                                "incident_id": incident_id,
+                                "success": True,
+                                "message": "Patch applied and verified.",
+                            })
+                        else:
+                            await broadcast({
+                                "type": "log_stream",
+                                "log_line": f"❌ [Relay] MAIN WORKSPACE APPLY FAILED: {error_msg}"
+                            })
+                            await broadcast({
+                                "type": "rerun_result",
+                                "incident_id": incident_id,
+                                "success": False,
+                                "message": error_msg,
+                            })
+                    else:
+                        print(f"⏸️ [Relay] Patch held for developer review (Trust Score: {trust.total_score}%, Policy: {policy.level.value}).")
                     continue
 
                 # 3. Incident Capture (from devdeck.py)
                 if "command" in data and "error_text" in data:
-                    # Generate an incident ID if not present
                     incident_id = data.get("incident_id", f"inc_{int(datetime.now().timestamp())}")
                     data["incident_id"] = incident_id
                     incidents[incident_id] = data
-
-                    print(f"[Relay] Captured Incident {incident_id} for command: {data['command']}")
+                    print(f"📍 [Relay] Captured Incident {incident_id} for: {data['command']}")
 
                     incident_history.append(data)
-                    if len(incident_history) > 30:
+                    if len(incident_history) > 50:
                         incident_history.pop(0)
 
-                # Broadcast to all other devices
+                # Broadcast to all clients
                 await broadcast(data, exclude=websocket)
 
             except Exception as e:
@@ -148,91 +249,33 @@ async def relay(websocket):
         authenticated_clients.discard(websocket)
         print(f"[Relay] Disconnected: {addr}. Remaining clients: {len(connected_clients)}")
 
-def apply_repair_robust(data):
-    file_path = data.get("file", "").replace("/", "\\")
-    line_num = data.get("line")
-    new_code_fragment = data.get("code", "")
-
-    if not all([file_path, line_num, new_code_fragment]):
-        return False, "Invalid repair payload", None, None
-
-    # Reject multi-line injections
-    if "\n" in new_code_fragment.strip() or "\r" in new_code_fragment.strip():
-        print(f"❌ [Relay] REJECTED: Multi-line fix attempt: {repr(new_code_fragment)}")
-        return False, "Multi-line fix rejected. Only single-line replacements permitted.", file_path, None
-
-    if not os.path.exists(file_path):
-        rel_path = os.path.basename(file_path)
-        if os.path.exists(rel_path):
-            file_path = rel_path
-        else:
-            return False, f"File {file_path} not found", file_path, None
-
-    # Step 1: Backup
-    backup_path = file_path + ".bak"
-    shutil.copy2(file_path, backup_path)
-    print(f"[Relay] Created backup at {backup_path}")
-
-    try:
-        # Step 2: Read fresh from disk
-        with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        original_line_count = len(lines)
-
-        if not (1 <= line_num <= original_line_count):
-            return False, f"Line number {line_num} out of bounds (1..{original_line_count})", file_path, backup_path
-
-        old_line_raw = lines[line_num - 1]
-        print(f"[Relay] INSTRUMENTATION - RAW LINE ON DISK: {repr(old_line_raw)}")
-
-        clean_code = new_code_fragment.strip()
-        print(f"[Relay] INSTRUMENTATION - AI PROPOSED FIX: {repr(clean_code)}")
-
-        # Preserve indentation
-        indent = old_line_raw[:len(old_line_raw) - len(old_line_raw.lstrip())]
-        new_full_line = f"{indent}{clean_code}\n"
-        print(f"[Relay] INSTRUMENTATION - LINE TO BE WRITTEN: {repr(new_full_line)}")
-
-        if old_line_raw == new_full_line:
-            return False, "AI suggested identical code. No change made.", file_path, backup_path
-
-        # Step 3: Write
-        lines[line_num - 1] = new_full_line
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
-
-        # Step 4: Verify after write
-        with open(file_path, 'r', encoding='utf-8') as f:
-            verified_lines = f.readlines()
-            new_line_count = len(verified_lines)
-            verified_line = verified_lines[line_num - 1]
-
-        if verified_line != new_full_line or original_line_count != new_line_count:
-            print("❌ [Relay] PATCH VERIFICATION FAILED! Restoring backup.")
-            shutil.copy2(backup_path, file_path)
-            return False, "Verification mismatch after write.", file_path, backup_path
-
-        print(f"✅ [Relay] Repaired and Verified {file_path}:{line_num}")
-        return True, None, file_path, backup_path
-
-    except Exception as e:
-        print(f"[Relay] Critical error applying repair: {e}")
-        if os.path.exists(backup_path):
-            shutil.copy2(backup_path, file_path)
-            print("📦 [Relay] ROLLED BACK successfully after error.")
-        return False, str(e), file_path, backup_path
 
 async def main():
-    host = os.environ.get("DEVDECK_RELAY_HOST", "0.0.0.0")
-    port = int(os.environ.get("DEVDECK_RELAY_PORT", 8765))
-    print(f"\n=======================================================")
-    print(f"⚡ DevDeck Bridge Relay Server")
-    print(f"   Listening on: ws://{host}:{port}")
-    print(f"   Ready for Android app & host CLI connections")
-    print(f"=======================================================\n")
+    host = "0.0.0.0"
+    port = 8765
+
+    # Print local IPs
+    hostname = socket.gethostname()
+    local_ips = ["127.0.0.1"]
+    try:
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127."):
+                local_ips.append(ip)
+    except Exception:
+        pass
+
+    print("=" * 65)
+    print("🚀 DevDeck Transparent Repair Runtime Bridge")
+    print(f"• Listening on: ws://localhost:{port} / ws://0.0.0.0:{port}")
+    print(f"• Autonomy Policy: {repair_memory.get_policy().level.value}")
+    print("=" * 65)
+
     async with websockets.serve(relay, host, port):
-        await asyncio.Future()
+        await asyncio.Future()  # Run forever
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[Relay] Server shut down.")

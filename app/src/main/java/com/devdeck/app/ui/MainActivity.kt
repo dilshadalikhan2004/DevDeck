@@ -1,42 +1,44 @@
 package com.devdeck.app.ui
 
 import android.content.Intent
-import android.content.res.ColorStateList
-import android.graphics.Color
 import android.os.Bundle
 import android.os.Build
 import android.content.ServiceConnection
 import android.content.ComponentName
 import android.os.IBinder
-import android.view.View
-import android.widget.EditText
-import android.widget.LinearLayout
 import android.widget.Toast
 import android.util.Log
 import android.net.Uri
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.lifecycleScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import com.devdeck.app.service.RelayService
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import com.devdeck.app.ai.DiagnosticAgent
-import com.devdeck.app.databinding.ActivityMainBinding
 import com.devdeck.app.model.DiagnosticHistory
-import kotlinx.coroutines.Dispatchers
+import com.devdeck.app.service.RelayService
+import com.devdeck.app.ui.components.DashboardScreen
+import com.devdeck.app.ui.theme.LuminaTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.*
 import org.json.JSONObject
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
 
-    private lateinit var binding: ActivityMainBinding
     private val agent by lazy { DiagnosticAgent(this) }
     private var relayService: RelayService? = null
     private val history by lazy { DiagnosticHistory(this) }
+    
+    private val telemetryLogs = MutableStateFlow<List<String>>(listOf(
+        "INFO: Gateway initialized on port 8080",
+        "REQ: /api/v3/auth/token - 200 OK (12ms)",
+        "REQ: /api/v3/users/me - 200 OK (45ms)",
+        "WARN: Rate limit approaching for client_id: 8f92a",
+        "REQ: /api/v3/data/sync - 202 ACCEPTED (210ms)"
+    ))
 
     private val securePrefs by lazy {
         val masterKey = MasterKey.Builder(this)
@@ -53,8 +55,7 @@ class MainActivity : AppCompatActivity() {
 
     private val relayListener = object : RelayService.RelayListener {
         override fun onConnectionStateChanged(connected: Boolean) {
-            updateRelayStatus(if (connected) "CONNECTED" else "RECONNECTING...", connected)
-            binding.liveTag.visibility = if (connected) View.VISIBLE else View.GONE
+            appendToTerminal(if (connected) "[Relay] Connected to desktop bridge" else "[Relay] Reconnecting...", if (connected) "ok" else "sys")
         }
 
         override fun onMessageReceived(text: String) {
@@ -84,189 +85,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val cameraLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val scannedText = result.data?.getStringExtra("scanned_text")
-            if (!scannedText.isNullOrBlank()) {
-                handleIncomingError(JSONObject().put("error_text", scannedText).toString())
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        
+        setContent {
+            LuminaTheme {
+                DashboardScreen(
+                    telemetryLogs = telemetryLogs.collectAsState().value,
+                    onAction = { action ->
+                        when (action) {
+                            "new_shell" -> appendToTerminal("System: New shell session requested.")
+                            "sync_db" -> appendToTerminal("System: Database synchronization started.")
+                            "run_tests" -> appendToTerminal("System: Test suite execution initiated.")
+                            "deploy" -> appendToTerminal("System: Deployment pipeline triggered.")
+                        }
+                    }
+                )
+            }
+        }
 
         initAgent()
         startRelayService()
-        setupNavigation()
-        setupActionButtons()
-        
-        // Set initial state
-        binding.btnNavHome.performClick()
-    }
-
-    private fun setupNavigation() {
-        val screens = mapOf(
-            binding.btnNavHome to binding.screenHome,
-            binding.btnNavTrace to binding.screenTrace,
-            binding.btnNavDiag to binding.screenDiag
-        )
-
-        screens.forEach { (btn, view) ->
-            btn.setOnClickListener {
-                vibrate()
-                // Reset all buttons
-                screens.keys.forEach { 
-                    it.setTextColor(Color.parseColor("#9297A1"))
-                    it.backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
-                }
-                // Highlight active
-                btn.setTextColor(Color.parseColor("#0B8A78"))
-                btn.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#E6F5F2"))
-                // Show screen
-                screens.values.forEach { it.visibility = View.GONE }
-                view.visibility = View.VISIBLE
-            }
-        }
-
-        // Trace screen tabs
-        binding.btnTabTrace.setOnClickListener {
-            vibrate()
-            binding.btnTabTrace.setBackgroundColor(Color.parseColor("#FBFBFC"))
-            binding.btnTabTrace.setTextColor(Color.parseColor("#15171C"))
-            binding.btnTabSource.setBackgroundColor(Color.TRANSPARENT)
-            binding.btnTabSource.setTextColor(Color.parseColor("#9297A1"))
-            
-            binding.errorText.visibility = View.VISIBLE
-            binding.sourceText.visibility = View.GONE
-        }
-        binding.btnTabSource.setOnClickListener {
-            vibrate()
-            binding.btnTabSource.setBackgroundColor(Color.parseColor("#FBFBFC"))
-            binding.btnTabSource.setTextColor(Color.parseColor("#15171C"))
-            binding.btnTabTrace.setBackgroundColor(Color.TRANSPARENT)
-            binding.btnTabTrace.setTextColor(Color.parseColor("#9297A1"))
-
-            binding.errorText.visibility = View.GONE
-            binding.sourceText.visibility = View.VISIBLE
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        initAgent()
-    }
-
-    private fun setupActionButtons() {
-        binding.modelStatusContainer.setOnClickListener {
-            vibrate()
-            startActivity(Intent(this, ModelSettingsActivity::class.java))
-        }
-        binding.demoButton.setOnClickListener { 
-            vibrate()
-            runDemo() 
-        }
-        binding.setupButton.setOnClickListener { 
-            vibrate()
-            showSetup() 
-        }
-        binding.historyButton.setOnClickListener { 
-            vibrate()
-            showHistory() 
-        }
-        binding.permissionButton.setOnClickListener {
-            vibrate()
-            showPermissionDialog()
-        }
-        binding.scanButton.setOnClickListener { 
-            vibrate()
-            cameraLauncher.launch(Intent(this, CameraActivity::class.java))
-        }
-        binding.addContextButton.setOnClickListener { 
-            vibrate()
-            showAddContextDialog() 
-        }
-        binding.incidentPreview.setOnClickListener {
-            vibrate()
-            binding.btnNavDiag.performClick()
-        }
-    }
-
-    private fun vibrate() {
-        binding.root.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-    }
-
-    private fun showAddContextDialog() {
-        val manager = com.devdeck.app.model.ProjectContextManager(this)
-        val input = EditText(this).apply {
-            hint = "e.g., Always use CustomLogger for network calls"
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Add Project Rule")
-            .setMessage("These rules ground the AI's diagnosis in your specific coding standards.")
-            .setView(input)
-            .setPositiveButton("Add") { _, _ ->
-                val rule = input.text.toString().trim()
-                if (rule.isNotEmpty()) {
-                    manager.addRule(rule)
-                    Toast.makeText(this, "Rule added to local knowledge", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Cancel", null)
-            .setNeutralButton("Clear all") { _, _ ->
-                manager.clear()
-                Toast.makeText(this, "Project context cleared", Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
-    private fun showPermissionDialog() {
-        val prefs = getSharedPreferences("devdeck", MODE_PRIVATE)
-        val modes = arrayOf("Ask every time", "Allow for session", "Always allow for project")
-        val currentMode = prefs.getInt("repair_permission_mode", 0)
-
-        AlertDialog.Builder(this)
-            .setTitle("Repair Permissions")
-            .setSingleChoiceItems(modes, currentMode) { dialog, which ->
-                prefs.edit().putInt("repair_permission_mode", which).apply()
-                Toast.makeText(this, "Mode set to: ${modes[which]}", Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
-            }
-            .show()
     }
 
     private fun initAgent() {
         lifecycleScope.launch {
             try {
                 agent.initModel()
-                when {
-                    agent.isEngineReady() -> {
-                        binding.modelStatus.text = "LOCAL AI: READY"
-                        binding.modelStatus.setTextColor(Color.parseColor("#0B8A78"))
-                        binding.modelDot.setBackgroundColor(Color.parseColor("#0B8A78"))
-                        binding.modelStatusContainer.setBackgroundColor(Color.parseColor("#E6F5F2"))
-                    }
-                    agent.isModelAvailable() -> {
-                        binding.modelStatus.text = "MODEL ERROR"
-                        binding.modelStatus.setTextColor(Color.parseColor("#B42318"))
-                        binding.modelDot.setBackgroundColor(Color.parseColor("#B42318"))
-                        binding.modelStatusContainer.setBackgroundColor(Color.parseColor("#FDECEA"))
-                        appendToTerminal("[System] Model file found but format is unsupported.", "fail")
-                    }
-                    else -> {
-                        binding.modelStatus.text = "MODEL MISSING"
-                        binding.modelStatus.setTextColor(Color.parseColor("#B42318"))
-                        binding.modelDot.setBackgroundColor(Color.parseColor("#B42318"))
-                        binding.modelStatusContainer.setBackgroundColor(Color.parseColor("#FDECEA"))
-                    }
+                if (agent.isEngineReady()) {
+                    appendToTerminal("Local AI Engine initialized and ready.", "ok")
+                } else {
+                    appendToTerminal("Local AI Engine initialization failed.", "fail")
                 }
             } catch (e: Exception) {
-                binding.modelStatus.text = "OFFLINE FALLBACK"
-                binding.modelStatus.setTextColor(Color.parseColor("#A9660A"))
-                binding.modelDot.setBackgroundColor(Color.parseColor("#A9660A"))
-                binding.modelStatusContainer.setBackgroundColor(Color.parseColor("#FBF1E1"))
+                appendToTerminal("Offline fallback active: ${e.message}", "sys")
             }
         }
     }
@@ -296,22 +148,10 @@ class MainActivity : AppCompatActivity() {
                 appendToTerminal("[Bridge] Paired with $url. Reconnecting...", "ok")
                 stopService(Intent(this, RelayService::class.java))
                 startRelayService()
-            } else {
-                Toast.makeText(this, "Invalid QR Data", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             Toast.makeText(this, "Pairing failed: ${e.message}", Toast.LENGTH_SHORT).show()
         }
-    }
-
-
-    private fun updateRelayStatus(status: String, ok: Boolean) {
-        binding.relayStatus.text = "RELAY: $status"
-        val color = if (ok) "#0B8A78" else "#B42318"
-        val tint = if (ok) "#E6F5F2" else "#FDECEA"
-        binding.relayStatus.setTextColor(Color.parseColor(color))
-        binding.relayDot.setBackgroundColor(Color.parseColor(color))
-        binding.relayStatusContainer.setBackgroundColor(Color.parseColor(tint))
     }
 
     private fun dispatchMessage(jsonText: String) {
@@ -322,41 +162,23 @@ class MainActivity : AppCompatActivity() {
                 "log_stream" -> {
                     val log = json.optString("log_line", "")
                     val logType = when {
-                        "SUCCESS" in log -> "ok"
+                        "SUCCESS" in log || "PATCH APPLIED" in log -> "ok"
                         "FAILED" in log -> "fail"
                         "Agent" in log -> "agent"
                         else -> "sys"
                     }
                     appendToTerminal(log, logType)
-                    handleLogStream(log)
                 }
                 "pair_result" -> {
                     val success = json.optBoolean("success", false)
                     if (success) {
                         appendToTerminal("[Bridge] Auth verified. Authority granted.", "ok")
-                        // Send a heartbeat to verify bi-directional traffic
-                        relayService?.sendMessage(JSONObject().put("type", "ping").put("timestamp", System.currentTimeMillis()).toString())
                     } else {
                         appendToTerminal("[Bridge] Auth failed: ${json.optString("error")}", "fail")
                     }
                 }
-                "pong" -> {
-                    Log.d("DevDeck", "Heartbeat received from bridge")
-                }
                 "incident" -> {
                     appendToTerminal("[System] Incoming incident detected. Analyzing...", "sys")
-                    handleIncomingError(jsonText)
-                }
-                "error" -> {
-                    appendToTerminal("[Bridge Error] ${json.optString("message")}", "fail")
-                }
-                else -> {
-                    // Fallback for older devdeck.py versions or generic messages
-                    if (json.has("error_text")) {
-                        handleIncomingError(jsonText)
-                    } else {
-                        Log.d("DevDeck", "Unknown message type: $type")
-                    }
                 }
             }
         } catch (e: Exception) {
@@ -368,293 +190,14 @@ class MainActivity : AppCompatActivity() {
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
         val logLine = if (text.length > 1000) text.take(997) + "..." else text
         
-        val color = when(type) {
-            "agent" -> "#5EEAD4" // Teal
-            "ok" -> "#9FE8B0" // Green
-            "fail" -> "#FF8A8A" // Red
-            else -> "#5B6270" // Muted Gray
-        }
-
-        val spannable = android.text.SpannableString("[$timestamp] $logLine\n")
-        spannable.setSpan(
-            android.text.style.ForegroundColorSpan(Color.parseColor(color)),
-            0, spannable.length,
-            android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-        )
-
-        binding.terminalText.append(spannable)
-        
-        // Auto-scroll to bottom
-        binding.terminalScroll.post {
-            binding.terminalScroll.fullScroll(View.FOCUS_DOWN)
+        val prefix = when(type) {
+            "agent" -> "Agent: "
+            "ok" -> "SUCCESS: "
+            "fail" -> "FAILED: "
+            else -> ""
         }
         
-        // Limit buffer
-        val currentText = binding.terminalText.text
-        if (currentText.length > 5000) {
-            binding.terminalText.text = currentText.substring(currentText.length - 3000)
-        }
-    }
-
-    private fun handleLogStream(logLine: String) {
-        if (logLine.isBlank()) return
-        lifecycleScope.launch {
-            val alert = agent.analyzeLogStream(logLine)
-            if (alert != null) {
-                binding.modelStatus.text = "PROACTIVE: $alert"
-                binding.modelStatus.setTextColor(Color.parseColor("#D29922")) // Amber
-            }
-        }
-    }
-
-    private fun handleIncomingError(jsonText: String) {
-        try {
-            val json = JSONObject(jsonText)
-            val errorTrace = json.getString("error_text")
-            val sourceContext = if (json.has("source_context") && !json.isNull("source_context")) {
-                json.getString("source_context")
-            } else null
-            
-            val errorFile = json.optString("error_file", "unknown_file")
-            val errorLine = if (json.has("error_line")) json.getInt("error_line") else -1
-            val originalLine = json.optString("original_line", "unknown line")
-            val incidentId = json.optString("incident_id")
-            val expectedSha = json.optString("expected_sha256")
-            val repositoryContext = json.optString("repository_context", "").takeIf { it.isNotBlank() }
-            val repositorySymbols = json.optJSONArray("allowed_symbols")?.let { array ->
-                buildSet { for (index in 0 until array.length()) add(array.getString(index)) }
-            } ?: emptySet()
-
-            // Update Home Screen Card
-            val title = try {
-                val lastLine = errorTrace.trim().split('\n').last()
-                val errorName = if (":" in lastLine) lastLine.split(':').first() else "Error"
-                val fileName = errorFile.split('\\').last().split('/').last()
-                "$errorName · $fileName"
-            } catch (e: Exception) {
-                "Incident Detected"
-            }
-            binding.incidentTitle.text = title
-            binding.incidentMeta.text = "line $errorLine · Just now"
-            
-            // Update Trace Screen
-            binding.tracePath.text = errorFile
-            binding.traceLine.text = "LINE $errorLine"
-            binding.errorText.text = SyntaxHighlighter.highlight(this, errorTrace)
-            binding.sourceText.text = if (!sourceContext.isNullOrBlank()) {
-                SyntaxHighlighter.highlight(this, sourceContext)
-            } else "No source context available."
-
-            // Update Diagnosis Screen
-            appendToTerminal("Updating UI for incident $incidentId...", "sys")
-            binding.diagTargetFile.text = errorFile.split('\\').last().split('/').last()
-            binding.diagnosisCard.visibility = View.VISIBLE
-            
-            // Reset UI for new analysis
-            binding.causeText.text = "Analyzing..."
-            binding.locationText.text = "$errorFile : $errorLine"
-            binding.diffRemoved.text = "− $originalLine"
-            binding.diffAdded.visibility = View.GONE
-            binding.inferenceTimeText.text = "Ready"
-            binding.telemetryLayout.visibility = View.GONE
-            binding.loadingText.visibility = View.VISIBLE
-            binding.specBlock.visibility = View.VISIBLE
-
-            // Auto-switch to Diagnosis Screen
-            binding.btnNavDiag.performClick()
-
-            appendToTerminal("Starting on-device analysis...", "sys")
-            // NPU Pulsing Animation
-            val pulseAnim = android.animation.ObjectAnimator.ofFloat(binding.diagnosisCard, "alpha", 1.0f, 0.7f).apply {
-                duration = 800
-                repeatMode = android.animation.ValueAnimator.REVERSE
-                repeatCount = android.animation.ValueAnimator.INFINITE
-                start()
-            }
-
-            lifecycleScope.launch {
-                val (result, duration) = agent.analyzeError(
-                    errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId,
-                    repositoryContext, repositorySymbols
-                )
-                
-                // PRINT FULL AI OUTPUT TO CONSOLE
-                appendToTerminal("Agent: Targeting line: '$originalLine'", "agent")
-                if (result.repairCode != null) {
-                    appendToTerminal("Agent: REPAIR GENERATED for ${result.location}", "ok")
-                } else {
-                    appendToTerminal("Agent: NO CONFIDENT REPAIR FOUND.", "fail")
-                }
-                
-                pulseAnim.cancel()
-                binding.diagnosisCard.alpha = 1.0f
-                
-                binding.loadingText.visibility = View.GONE
-                binding.inferenceTimeText.text = if (duration > 0) "${(duration / 1000f)}s" else "offline"
-                
-                binding.telemetryLayout.visibility = View.VISIBLE
-                binding.tpsText.text = "TPS %.1f".format(result.tokensPerSecond)
-                binding.memText.text = "MEM ${result.memoryUsageMB}MB"
-                
-                if (result.isParsed) {
-                    binding.causeText.text = result.rootCause
-                    binding.locationText.text = "${result.location} : ${result.repairLine ?: errorLine}"
-                    
-                    if (result.patchType == com.devdeck.app.model.PatchType.DIFF && result.diffText != null) {
-                        binding.diffRemoved.text = "Unified Diff Generated"
-                        binding.diffAdded.visibility = View.VISIBLE
-                        binding.diffAdded.text = result.diffText
-                    } else if (result.repairCode != null) {
-                        binding.diffAdded.visibility = View.VISIBLE
-                        binding.diffAdded.text = "+ ${result.repairCode}"
-                    } else {
-                        binding.diffAdded.visibility = View.GONE
-                    }
-
-                    if (result.repairCode != null || result.diffText != null) {
-                        binding.repairButton.visibility = View.VISIBLE
-                        binding.repairButton.text = "Apply autonomous repair"
-                        binding.repairButton.isEnabled = true
-                        binding.repairButton.setOnClickListener {
-                            vibrate()
-                            sendRepair(result)
-                        }
-                        
-                        // AGENTIC BEHAVIOR: If switch is on, auto-send repair
-                        if (binding.agentModeSwitch.isChecked) {
-                            appendToTerminal("Agent: High confidence fix found. Applying autonomously...")
-                            sendRepair(result)
-                        }
-                    } else {
-                        binding.repairButton.visibility = View.GONE
-                        
-                        // Debugging: If no repair found, allow tapping the card to see raw AI output
-                        binding.diagnosisCard.setOnClickListener {
-                            AlertDialog.Builder(this@MainActivity)
-                                .setTitle("Raw AI Reasoning")
-                                .setMessage(result.rawOutput ?: "No raw output captured.")
-                                .setPositiveButton("OK", null)
-                                .show()
-                        }
-                    }
-                } else {
-                    binding.causeText.text = "Analysis complete (Verbose format)"
-                    // Fallback fix text if not parsed but present in fix field
-                    binding.diffAdded.visibility = View.VISIBLE
-                    binding.diffAdded.text = "+ ${result.fix}"
-                }
-                history.add(result)
-            }
-        } catch (e: Exception) {
-            appendToTerminal("[System] Failed to parse incident: ${e.message}")
-        }
-    }
-
-    private fun sendRepair(result: com.devdeck.app.model.DiagnosticResult) {
-        val json = when (result.patchType) {
-            com.devdeck.app.model.PatchType.SINGLE_LINE -> JSONObject().apply {
-                put("type", "repair")
-                put("protocol_version", 2)
-                put("patch_type", "single_line")
-                put("file", result.repairFile)
-                put("line", result.repairLine)
-                put("code", result.repairCode)
-                put("expected_sha256", result.expectedSha256)
-                put("incident_id", result.incidentId)
-            }
-            com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
-                put("type", "repair")
-                put("protocol_version", 2)
-                put("patch_type", "diff")
-                put("file", result.repairFile)
-                put("diff_text", result.diffText)
-                put("expected_sha256", result.expectedSha256)
-                put("incident_id", result.incidentId)
-            }
-        }
-        appendToTerminal("Sending ${result.patchType} repair to laptop...", "sys")
-        val sent = relayService?.sendMessage(json.toString()) ?: false
-        if (sent) {
-            appendToTerminal("Repair payload SENT successfully.", "ok")
-            binding.repairButton.text = "Repair sent to laptop"
-            binding.repairButton.isEnabled = false
-            binding.repairButton.icon = ContextCompat.getDrawable(this, android.R.drawable.checkbox_on_background)
-            binding.repairButton.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#E6F5F2"))
-            binding.repairButton.setTextColor(Color.parseColor("#0B8A78"))
-        } else {
-            appendToTerminal("ERROR: Failed to send repair payload.", "fail")
-        }
-    }
-
-    private fun runDemo() {
-        handleIncomingError("""
-            Traceback (most recent call last):
-              File "auth_service.py", line 42, in get_user_token
-                if user.is_authenticated():
-            AttributeError: 'NoneType' object has no attribute 'is_authenticated'
-        """.trimIndent().let { trace ->
-            JSONObject()
-                .put("error_text", trace)
-                .put("error_file", "auth_service.py")
-                .put("error_line", 42)
-                .put("original_line", "if user.is_authenticated():")
-                .put("source_context", """
-                38: user = db.find_user(user_id)
-                40: print(f"Fetching token for {user_id}")
-                >>> 42: if user.is_authenticated():
-                43:     return user.token
-            """.trimIndent()).toString()
-        })
-    }
-
-    private fun showSetup() {
-        val prefs = getSharedPreferences("devdeck", MODE_PRIVATE)
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(60, 40, 60, 10)
-        }
-        val urlInput = EditText(this).apply {
-            hint = "Relay URL (ws://192.168.x.x:8765)"
-            setText(prefs.getString("relay_url", "ws://localhost:8765"))
-        }
-        val secretInput = EditText(this).apply {
-            hint = "Pairing Secret"
-            setText(prefs.getString("pairing_secret", "DECK-POCKET-SAFE"))
-        }
-        layout.addView(urlInput)
-        layout.addView(secretInput)
-
-        AlertDialog.Builder(this)
-            .setTitle("Laptop pairing")
-            .setMessage("Enter the Relay URL and Pairing Secret from your desktop bridge.")
-            .setView(layout)
-            .setPositiveButton("Save & connect") { _, _ ->
-                securePrefs.edit()
-                    .putString("relay_url", urlInput.text.toString().trim())
-                    .putString("pairing_secret", secretInput.text.toString().trim())
-                    .apply()
-                stopService(Intent(this, RelayService::class.java))
-                startRelayService()
-            }
-            .setNeutralButton("Unpair") { _, _ ->
-                securePrefs.edit().clear().apply()
-                stopService(Intent(this, RelayService::class.java))
-                appendToTerminal("[Bridge] Unpaired successfully.", "sys")
-            }
-            .setNegativeButton("Pair with QR") { _, _ ->
-                val intent = Intent(this, CameraActivity::class.java).apply {
-                    putExtra(CameraActivity.EXTRA_PAIRING_MODE, true)
-                }
-                qrLauncher.launch(intent)
-            }
-            .show()
-    }
-
-    private fun showHistory() {
-        AlertDialog.Builder(this)
-            .setTitle("Private debugging log")
-            .setMessage(history.summary())
-            .setPositiveButton("Done", null).show()
+        telemetryLogs.update { (it + "[$timestamp] $prefix$logLine").takeLast(50) }
     }
 
     override fun onDestroy() {

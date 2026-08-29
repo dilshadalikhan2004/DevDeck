@@ -33,10 +33,15 @@ async def run_test(case):
 
     # 1. Setup file
     file_path = os.path.abspath(case['file'])
-    with open(file_path, 'w') as f:
+    with open(file_path, 'w', encoding='utf-8') as f:
         f.write(case['content'])
 
-    sha256 = hashlib.sha256(case['content'].encode('utf-8')).hexdigest()
+    # Calculate SHA256 from the written file to ensure stability with line endings
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    sha256 = sha256_hash.hexdigest()
 
     # 2. Start relay server if not running (assumed running for this script)
 
@@ -52,16 +57,36 @@ async def run_test(case):
 
         print("✅ Authenticated with Relay.")
 
-        # 4. Run command via devdeck.py in background
-        # Note: In a real test, devdeck.py would send the incident.
-        # Here we manually send the repair to test the hardening.
+        # 4. Send Incident first (Protocol v2 requirement)
+        incident_id = f"test_inc_{int(time.time())}"
+        project_root = os.path.dirname(file_path)
+        project_id = hashlib.sha256(project_root.encode('utf-8')).hexdigest()
 
+        incident_payload = {
+            "type": "incident",
+            "protocol_version": 2,
+            "incident_id": incident_id,
+            "project_id": project_id,
+            "project_root": project_root,
+            "command": f"python {case['file']}",
+            "error_text": "Mock Error",
+            "error_file": case['file'],
+            "expected_sha256": sha256
+        }
+        print(f"📡 Sending Mock Incident {incident_id}...")
+        await ws.send(json.dumps(incident_payload))
+        await asyncio.sleep(0.5) # Give relay time to store
+
+        # 5. Send Repair Payload
         repair_payload = {
             "type": "repair",
+            "protocol_version": 2,
             "patch_type": case["fix_type"],
-            "file": file_path,
+            "file": case['file'],
             "expected_sha256": sha256,
-            "incident_id": "test_bench",
+            "incident_id": incident_id,
+            "project_id": project_id,
+            "confidence": 1.0
         }
         if case["fix_type"] == "single_line":
             repair_payload["line"] = case["line"]

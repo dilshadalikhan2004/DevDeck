@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="12dp"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="0dp"
+    app:strokeColor="@color/color_border"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/receiptFileName"
+                style="@style/TextAppearance.DevDeck.Heading"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="middle"
+                android:maxLines="1"
+                android:textSize="14sp"
+                tools:text="auth_service.py" />
+
+            <TextView
+                android:id="@+id/receiptTokenCount"
+                style="@style/TextAppearance.DevDeck.Mono"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_pill_teal"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="3dp"
+                android:textColor="@color/color_teal"
+                android:textSize="10sp"
+                tools:text="142 TOK" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/receiptLines"
+            style="@style/TextAppearance.DevDeck.Mono"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/color_mist"
+            android:textSize="11sp"
+            tools:text="LINES 38-48" />
+
+        <TextView
+            android:id="@+id/receiptReasons"
+            style="@style/TextAppearance.DevDeck.Body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:lineSpacingExtra="2dp"
+            android:textColor="@color/color_ink_soft"
+            android:textSize="12sp"
+            tools:text="• Referenced in stack trace\n• Immediate stack frame context" />
+
+        <LinearLayout
+            android:id="@+id/symbolsLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/TextAppearance.DevDeck.Mono"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="INDEXED SYMBOLS"
+                android:textColor="@color/color_mist"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/receiptSymbols"
+                style="@style/TextAppearance.DevDeck.Mono"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/color_teal"
+                android:textSize="10sp"
+                tools:text="get_user_token, is_authenticated" />
+        </LinearLayout>
+
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

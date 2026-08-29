@@ -35,3 +35,7 @@ def sha256_file(path: str | Path) -> str:
         while chunk := source.read(64 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+compute_sha256 = sha256_file
+

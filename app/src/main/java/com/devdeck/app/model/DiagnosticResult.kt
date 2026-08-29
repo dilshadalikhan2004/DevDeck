@@ -20,5 +20,7 @@ data class DiagnosticResult(
     val patchType: PatchType = PatchType.SINGLE_LINE,
     val diffText: String? = null,
     val expectedSha256: String? = null,
-    val incidentId: String? = null
+    val incidentId: String? = null,
+    val projectId: String? = null,
+    val confidence: Float = 1.0f
 )

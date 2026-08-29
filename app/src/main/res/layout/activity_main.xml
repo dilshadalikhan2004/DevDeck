@@ -44,6 +44,14 @@
                 android:text="Diagnosis"
                 android:textAllCaps="false"
                 android:textColor="@color/color_mist" />
+            <Button
+                android:id="@+id/btnNavReceipts"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Receipts"
+                android:textAllCaps="false"
+                android:textColor="@color/color_mist" />
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -913,5 +921,62 @@
                 </FrameLayout>
             </LinearLayout>
         </ScrollView>
+
+        <!-- ================= RECEIPTS SCREEN ================= -->
+        <LinearLayout
+            android:id="@+id/screenReceipt"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="20dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="18dp">
+                <FrameLayout
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:background="@drawable/bg_app_mark">
+                    <ImageView
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:layout_gravity="center"
+                        android:src="@android:drawable/ic_menu_agenda"
+                        app:tint="@color/color_code_signal" />
+                </FrameLayout>
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="11dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        style="@style/TextAppearance.DevDeck.Heading"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Evidence set"
+                        android:textSize="15sp" />
+                    <TextView
+                        android:id="@+id/receiptTotalText"
+                        style="@style/TextAppearance.DevDeck.Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 files · 0 tokens indexed"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/receiptRecyclerView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingBottom="20dp"
+                tools:listitem="@layout/item_receipt_card" />
+        </LinearLayout>
     </FrameLayout>
 </LinearLayout>
