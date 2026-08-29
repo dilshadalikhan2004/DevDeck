@@ -46,6 +46,8 @@ class RepairRequest:
             raise ValueError("patch_type must be single_line or diff")
 
         line = payload.get("line")
+        if isinstance(line, float) and line.is_integer():
+            line = int(line)
         code = payload.get("code")
         diff_text = payload.get("diff_text")
         if patch_type == "single_line":

@@ -390,9 +390,9 @@ class MainActivity : ComponentActivity() {
                         viewModel.applyPipelineEvent(
                             PipelineEvent(
                                 incidentId,
-                                PipelineStage.CRASH_DETECTED,
+                                PipelineStage.SANDBOX_DRY_RUN,
                                 EventPhase.FAILED,
-                                "Relay error: $msg"
+                                "Sandbox setup failed: $msg"
                             )
                         )
                     }
@@ -529,14 +529,20 @@ class MainActivity : ComponentActivity() {
                     projectId, repoContext, symbols, developerConstraint
                 )
 
-                if (result.abstained) {
+                if (result.abstained || (
+                    result.patchType == com.devdeck.app.model.PatchType.SINGLE_LINE &&
+                        (result.repairLine == null || result.repairLine < 1 || result.repairCode.isNullOrBlank())
+                    ) || (
+                    result.patchType == com.devdeck.app.model.PatchType.DIFF && result.diffText.isNullOrBlank()
+                    )
+                ) {
                     viewModel.applyPipelineEvent(
                         PipelineEvent(
                             incidentId,
                             PipelineStage.DIAGNOSING,
                             EventPhase.FAILED,
-                            "Model returned NEEDS_CONTEXT: not enough evidence to propose a safe fix",
-                            detail = result.rawOutput
+                            result.fix.ifBlank { "No safe patch could be synthesized for this failure" },
+                            detail = result.reasoning ?: result.rootCause
                         )
                     )
                     return@launch
@@ -620,18 +626,34 @@ class MainActivity : ComponentActivity() {
 
     private fun sendRepair(result: com.devdeck.app.model.DiagnosticResult, intent: String) {
         val json = when (result.patchType) {
-            com.devdeck.app.model.PatchType.SINGLE_LINE -> JSONObject().apply {
-                put("type", "repair")
-                put("protocol_version", 2)
-                put("patch_type", "single_line")
-                put("file", result.repairFile)
-                put("line", result.repairLine)
-                put("code", result.repairCode)
-                put("expected_sha256", result.expectedSha256)
-                put("incident_id", result.incidentId)
-                put("project_id", result.projectId)
-                put("confidence", result.confidence)
-                put("intent", intent)
+            com.devdeck.app.model.PatchType.SINGLE_LINE -> {
+                val line = result.repairLine
+                val code = result.repairCode
+                if (line == null || line < 1 || code.isNullOrBlank()) {
+                    val id = result.incidentId ?: return
+                    viewModel.applyPipelineEvent(
+                        PipelineEvent(
+                            id,
+                            PipelineStage.SANDBOX_DRY_RUN,
+                            EventPhase.FAILED,
+                            "Sandbox setup failed: single_line repairs require a positive line and code"
+                        )
+                    )
+                    return
+                }
+                JSONObject().apply {
+                    put("type", "repair")
+                    put("protocol_version", 2)
+                    put("patch_type", "single_line")
+                    put("file", result.repairFile)
+                    put("line", line)
+                    put("code", code)
+                    put("expected_sha256", result.expectedSha256)
+                    put("incident_id", result.incidentId)
+                    put("project_id", result.projectId)
+                    put("confidence", result.confidence.toDouble())
+                    put("intent", intent)
+                }
             }
             com.devdeck.app.model.PatchType.DIFF -> JSONObject().apply {
                 put("type", "repair")
@@ -642,7 +664,7 @@ class MainActivity : ComponentActivity() {
                 put("expected_sha256", result.expectedSha256)
                 put("incident_id", result.incidentId)
                 put("project_id", result.projectId)
-                put("confidence", result.confidence)
+                put("confidence", result.confidence.toDouble())
                 put("intent", intent)
             }
         }

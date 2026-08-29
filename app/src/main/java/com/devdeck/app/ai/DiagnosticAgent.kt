@@ -426,9 +426,10 @@ class DiagnosticAgent(private val context: Context?) {
             repairLine = heuristicResult.repairLine ?: lineNum,
             repairCode = heuristicResult.repairCode,
             originalLine = originalLine,
-            patchType = PatchType.SINGLE_LINE,
+            patchType = heuristicResult.patchType,
             rawOutput = "",
-            reasoning = heuristicResult.fix
+            reasoning = heuristicResult.fix,
+            abstained = heuristicResult.abstained || heuristicResult.repairCode.isNullOrBlank()
         )
     }
 }
@@ -563,8 +564,14 @@ internal object HeuristicDiagnosticEngine {
             }
 
             else -> {
-                cause = "Command failed at deepest stack frame."
-                fix = "Review syntax and runtime bindings."
+                if ("modulenotfounderror" in normalized || "failed to import test module" in normalized) {
+                    cause = "Unittest loaded a file path as a package (e.g. tests.unit) instead of discovering the test module."
+                    fix = "Run with unittest discover, or add empty __init__.py files under tests/. No single-line source patch is safe here."
+                    repairCode = null
+                } else {
+                    cause = "Command failed at deepest stack frame."
+                    fix = "Review syntax and runtime bindings."
+                }
             }
         }
 
@@ -576,6 +583,8 @@ internal object HeuristicDiagnosticEngine {
             repairLine = lineNum,
             repairCode = repairCode,
             originalLine = origLine,
+            patchType = PatchType.SINGLE_LINE,
+            abstained = repairCode.isNullOrBlank(),
             tokensPerSecond = 0f,
             memoryUsageMB = 0,
             reasoning = fix
