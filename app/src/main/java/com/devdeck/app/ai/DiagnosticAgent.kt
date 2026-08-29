@@ -344,7 +344,7 @@ class DiagnosticAgent(private val context: Context) {
 }
 
 /** Deterministic offline safety net: generates precise, guaranteed-working repairs for known error patterns */
-private object HeuristicDiagnosticEngine {
+internal object HeuristicDiagnosticEngine {
     fun diagnose(
         trace: String, 
         source: String?, 
