@@ -55,6 +55,10 @@ DevDeck Pocket intercepts failed developer commands (tests, builds, scripts), tr
 4. **📊 Dual-Tier Intelligence**: High-accuracy few-shot prompt for on-device Gemma-2B + deterministic `HeuristicDiagnosticEngine` covering `TypeError`, `AttributeError`, `KeyError`, `ZeroDivisionError`, `NPE`, and `IndexError`.
 5. **💻 Web Command Center**: Live web dashboard in `office-kit-dashboard/index.html` displaying real-time telemetry, incident replays, and audit trails.
 
+### Two-gate repair verification
+
+For protocol-v2 repairs, DevDeck first tests the candidate patch in a temporary local copy of the trusted project. Only a passing candidate reaches the working copy, where DevDeck repeats verification and can restore its snapshot if the live environment differs. This is a local temporary-directory sandbox for small projects, not a container or virtual machine.
+
 ---
 
 ## 🚀 Quickstart & Demo Flow

@@ -34,6 +34,11 @@ def repair_for_incident(payload, incident_store):
         raise ValueError("incident project root does not match project id")
     return repair, incident, resolve_project_file(project, repair.file)
 
+
+def sandbox_project_root(incident):
+    """Return the root captured with a validated protocol-v2 incident."""
+    return incident["project_root"]
+
 async def broadcast(message_dict, exclude=None):
     if not connected_clients:
         return
@@ -99,7 +104,10 @@ async def relay(websocket):
                     # Use command from incident if available
                     cmd_to_rerun = incident_data.get("command") if incident_data else None
 
-                    success, error_msg, file_path, transaction_id = patch_manager.apply_repair(data, cmd_to_rerun)
+                    project_root = sandbox_project_root(incident_data) if data.get("protocol_version") == 2 else None
+                    success, error_msg, file_path, transaction_id = patch_manager.apply_repair(
+                        data, cmd_to_rerun, project_root=project_root
+                    )
 
                     if not success:
                         await broadcast({
