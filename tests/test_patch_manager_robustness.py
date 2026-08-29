@@ -2,6 +2,7 @@
 import tempfile
 import shutil
 import os
+import sys
 from patch_manager import PatchManager
 
 class TestPatchManagerRobustness(unittest.TestCase):
@@ -41,6 +42,48 @@ class TestPatchManagerRobustness(unittest.TestCase):
         with open(test_file, "r", encoding="utf-8") as f:
             content = f.read()
         self.assertEqual(content, "def calc():\n    return 1\n")
+
+    def test_successful_rerun_keeps_patch(self):
+        test_file = os.path.join(self.test_dir, "ok.py")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("x = 1\nprint(x)\n")
+
+        data = {
+            "patch_type": "single_line",
+            "file": test_file,
+            "line": 1,
+            "code": "x = 2",
+        }
+        ok_cmd = f'"{sys.executable}" -c "raise SystemExit(0)"'
+        success, err, _, _ = self.patch_mgr.apply_repair(
+            data, last_command=ok_cmd, project_root=self.test_dir
+        )
+        self.assertTrue(success, err)
+        with open(test_file, "r", encoding="utf-8") as f:
+            self.assertIn("x = 2", f.read())
+
+    def test_skip_preflight_applies_even_if_sha_is_stale(self):
+        test_file = os.path.join(self.test_dir, "stale.py")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("x = 1\n")
+        data = {
+            "protocol_version": 2,
+            "patch_type": "single_line",
+            "file": test_file,
+            "line": 1,
+            "code": "x = 3",
+            "expected_sha256": "a" * 64,
+        }
+        ok_cmd = f'"{sys.executable}" -c "raise SystemExit(0)"'
+        success, err, _, _ = self.patch_mgr.apply_repair(
+            data,
+            last_command=ok_cmd,
+            project_root=self.test_dir,
+            skip_preflight=True,
+        )
+        self.assertTrue(success, err)
+        with open(test_file, "r", encoding="utf-8") as f:
+            self.assertIn("x = 3", f.read())
 
     def test_syntax_error_prevention(self):
         test_file = os.path.join(self.test_dir, "syntax_check.py")

@@ -99,7 +99,7 @@ fun MainScaffold(
 
                 AppScreen.REPAIR -> RepairWorkspace(viewModel = viewModel, state = state)
 
-                AppScreen.BRAIN -> BrainScreen()
+                AppScreen.BRAIN -> BrainScreen(state = state)
 
                 AppScreen.HISTORY -> HistoryScreen(historyItems = state.historyItems)
 
@@ -131,6 +131,17 @@ fun RepairWorkspace(viewModel: MainViewModel, state: AppState) {
             onSelectStage = { viewModel.selectStage(it) },
             onDismissIncident = { id -> viewModel.dismissCompletedPipeline(id) }
         )
+        if (state.sandboxRunning || state.sandboxLines.isNotEmpty()) {
+            Text(
+                "SANDBOX DRY-RUN",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            LiveSandboxConsole(
+                lines = state.sandboxLines,
+                running = state.sandboxRunning
+            )
+        }
         val selected = state.selectedStage
         if (pipeline != null && selected != null) {
             StageDetailPanel(pipeline, selected)

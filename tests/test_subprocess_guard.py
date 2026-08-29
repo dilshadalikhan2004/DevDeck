@@ -20,6 +20,20 @@ class ParseRunCommandTest(unittest.TestCase):
     def test_empty_after_only_run_keywords(self):
         self.assertEqual("", parse_run_command(["run", "RUN"]))
 
+    def test_watch_outcome_complete_is_success(self):
+        from devdeck import _watch_outcome
+        self.assertEqual(
+            "success",
+            _watch_outcome({"type": "repair_success", "incident_id": "inc-1"}, "inc-1"),
+        )
+        self.assertEqual(
+            "failed",
+            _watch_outcome(
+                {"type": "pipeline_event", "incident_id": "inc-1", "stage": "verifying", "phase": "failed", "message": "nope"},
+                "inc-1",
+            ),
+        )
+
     def test_cli_invocation_error_only_for_run_token(self):
         from devdeck import is_cli_invocation_error
         self.assertTrue(is_cli_invocation_error("run python -m unittest"))

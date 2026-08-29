@@ -379,6 +379,19 @@ class MainActivity : ComponentActivity() {
                     if (line.isNotBlank()) viewModel.addSandboxLine(line)
                 }
                 "sandbox_done" -> viewModel.setSandboxRunning(false)
+                "brain_ready" -> {
+                    val tests = json.stringList("tests")
+                    viewModel.setBrainReady(
+                        filesIndexed = json.optInt("files_indexed"),
+                        symbolsIndexed = json.optInt("symbols_indexed"),
+                        testsDiscovered = json.optInt("tests_discovered"),
+                        projectRoot = json.optString("project_root"),
+                        tests = tests
+                    )
+                    viewModel.mergeBrainFromIncident(json.stringList("sample_symbols"), emptyList())
+                    val root = json.optString("project_root")
+                    if (root.isNotBlank()) viewModel.setActiveProject(root)
+                }
                 "sandbox_verified" -> onSandboxVerified(json)
                 "rerun_result", "repair_success", "repair_failed" -> onApplyOutcome(type, json)
                 "error" -> {
@@ -508,6 +521,15 @@ class MainActivity : ComponentActivity() {
                 json.optJSONArray("allowed_symbols")?.let { arr ->
                     for (i in 0 until arr.length()) symbols.add(arr.optString(i))
                 }
+                val evidenceFiles = mutableListOf<String>()
+                json.optJSONObject("context_receipt")?.optJSONArray("items")?.let { items ->
+                    for (i in 0 until items.length()) {
+                        val file = items.optJSONObject(i)?.optString("file").orEmpty()
+                        if (file.isNotBlank()) evidenceFiles.add(file)
+                    }
+                }
+                if (errorFile.isNotBlank() && errorFile != "unknown") evidenceFiles.add(0, errorFile)
+                viewModel.mergeBrainFromIncident(symbols.toList(), evidenceFiles)
 
                 if (json.optBoolean("validation_error", false)) {
                     val msg = json.optString(
@@ -681,6 +703,13 @@ class MainActivity : ComponentActivity() {
                     "Sandbox dry-run failed: laptop bridge is not connected"
                 )
             )
+        }
+    }
+
+    private fun JSONObject.stringList(key: String): List<String> {
+        val arr = optJSONArray(key) ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            arr.optString(i).takeIf { it.isNotBlank() }
         }
     }
 
