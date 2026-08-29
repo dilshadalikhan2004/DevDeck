@@ -45,7 +45,8 @@ fun DashboardScreen(
                     )
                 )
             )
-            .padding(horizontal = 20.dp, vertical = 20.dp),
+            .padding(horizontal = 20.dp, vertical = 20.dp)
+            .padding(bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
