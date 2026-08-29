@@ -7,6 +7,10 @@ from datetime import datetime
 import re
 import os
 import hashlib
+import uuid
+from pathlib import Path
+
+from bridge_security import canonical_project_root, sha256_file
 
 async def send_error(error_data):
     uri = os.environ.get("DEVDECK_RELAY_URI", "ws://localhost:8765")
@@ -116,6 +120,33 @@ def clean_stderr(stderr):
         lines = lines[-50:]
     return "\n".join(lines)
 
+
+def build_incident_payload(command, stderr, project_root=None):
+    source_context, file_path, line_num, original_line = get_error_metadata(stderr)
+    project = canonical_project_root(project_root or Path.cwd())
+    source_path = Path(file_path).resolve() if file_path and Path(file_path).exists() else None
+    relative_file = None
+    expected_sha256 = None
+    if source_path and source_path.is_file() and project.path in source_path.parents:
+        relative_file = source_path.relative_to(project.path).as_posix()
+        expected_sha256 = sha256_file(source_path)
+
+    return {
+        "type": "incident",
+        "protocol_version": 2,
+        "incident_id": str(uuid.uuid4()),
+        "project_id": project.project_id,
+        "timestamp": datetime.now().isoformat(),
+        "command": command,
+        "error_text": clean_stderr(stderr),
+        "source_context": source_context,
+        "error_file": relative_file,
+        "error_line": line_num,
+        "original_line": original_line,
+        "language": detect_language(relative_file),
+        "expected_sha256": expected_sha256,
+    }
+
 def run_command(command):
     print(f"\n[DevDeck Active Watch] Executing: {command}")
     print("=" * 60)
@@ -132,31 +163,12 @@ def run_command(command):
     if process.returncode != 0:
         print("=" * 60)
         print("❌ [DevDeck] Command failed (Exit Code: {}). Analyzing incident...".format(process.returncode))
-        cleaned_error = clean_stderr(stderr)
-        source_context, file_path, line_num, original_line = get_error_metadata(stderr)
+        error_payload = build_incident_payload(command, stderr)
 
-        lang = detect_language(file_path)
-        incident_id = f"inc_{int(datetime.now().timestamp())}"
-        sha256 = calculate_sha256(file_path)
-
-        error_payload = {
-            "type": "incident",
-            "incident_id": incident_id,
-            "timestamp": datetime.now().isoformat(),
-            "command": command,
-            "error_text": cleaned_error,
-            "source_context": source_context,
-            "error_file": os.path.abspath(file_path) if file_path and os.path.exists(file_path) else file_path,
-            "error_line": line_num,
-            "original_line": original_line,
-            "language": lang,
-            "expected_sha256": sha256
-        }
-
-        print(f"📍 Target: {file_path}:{line_num} [{lang}]")
-        print(f"🆔 Incident ID: {incident_id}")
-        if original_line:
-            print(f"🔍 Line Content: {original_line}")
+        print(f"📍 Target: {error_payload['error_file']}:{error_payload['error_line']} [{error_payload['language']}]")
+        print(f"🆔 Incident ID: {error_payload['incident_id']}")
+        if error_payload["original_line"]:
+            print(f"🔍 Line Content: {error_payload['original_line']}")
 
         asyncio.run(send_error(error_payload))
 
