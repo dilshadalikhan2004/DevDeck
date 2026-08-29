@@ -11,3 +11,4 @@ captures/
 __pycache__/
 *.pyc
 *.bak
+.worktrees/
