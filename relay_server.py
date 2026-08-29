@@ -7,6 +7,7 @@ import shutil
 from datetime import datetime
 from patch_manager import PatchManager
 from bridge_protocol import RepairRequest
+from bridge_security import canonical_project_root, resolve_project_file
 
 connected_clients = set()
 authenticated_clients = set()
@@ -25,7 +26,13 @@ def repair_for_incident(payload, incident_store):
         raise ValueError("unknown incident")
     if incident.get("project_id") != repair.project_id:
         raise ValueError("repair project does not match incident")
-    return repair, incident
+    project_root = incident.get("project_root")
+    if not isinstance(project_root, str):
+        raise ValueError("incident is missing its trusted project root")
+    project = canonical_project_root(project_root)
+    if project.project_id != repair.project_id:
+        raise ValueError("incident project root does not match project id")
+    return repair, incident, resolve_project_file(project, repair.file)
 
 async def broadcast(message_dict, exclude=None):
     if not connected_clients:
@@ -74,10 +81,11 @@ async def relay(websocket):
 
                     if data.get("protocol_version") == 2:
                         try:
-                            repair, incident_data = repair_for_incident(data, incidents)
+                            repair, incident_data, target_path = repair_for_incident(data, incidents)
                         except ValueError as error:
                             await websocket.send(json.dumps({"type": "error", "message": str(error)}))
                             continue
+                        data = {**data, "file": str(target_path)}
 
                     target_file = data.get("file", "")
                     patch_type = data.get("patch_type", "single_line")

@@ -136,6 +136,7 @@ def build_incident_payload(command, stderr, project_root=None):
         "protocol_version": 2,
         "incident_id": str(uuid.uuid4()),
         "project_id": project.project_id,
+        "project_root": str(project.path),
         "timestamp": datetime.now().isoformat(),
         "command": command,
         "error_text": clean_stderr(stderr),

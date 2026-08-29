@@ -27,6 +27,31 @@ class BridgeProtocolTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown incident"):
             repair_for_incident(valid_payload(), {})
 
+    def test_repair_rejects_a_path_outside_the_captured_project(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project = Path(temp_dir) / "project"
+            project.mkdir()
+            source = project / "src" / "example.py"
+            source.parent.mkdir()
+            source.write_text("print('safe')\n", encoding="utf-8")
+            outside = Path(temp_dir) / "outside.py"
+            outside.write_text("print('unsafe')\n", encoding="utf-8")
+            incident = build_incident_payload(
+                "py -3.11 src/example.py",
+                f'File "{source}", line 1\nValueError: boom',
+                project,
+            )
+            payload = valid_payload()
+            payload.update({
+                "incident_id": incident["incident_id"],
+                "project_id": incident["project_id"],
+                "file": "../outside.py",
+                "expected_sha256": "a" * 64,
+            })
+
+            with self.assertRaisesRegex(ValueError, "outside trusted project root"):
+                repair_for_incident(payload, {incident["incident_id"]: incident})
+
     def test_incident_payload_uses_a_uuid_and_project_relative_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project = Path(temp_dir)
