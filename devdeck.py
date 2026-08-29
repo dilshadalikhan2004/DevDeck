@@ -86,6 +86,13 @@ def get_error_metadata(stderr: str):
     found_line = None
     lines = stderr.splitlines()
 
+    def is_stdlib_file(p: str) -> bool:
+        norm = p.replace("\\", "/").lower()
+        return any(x in norm for x in [
+            "lib/unittest", "site-packages", "importlib", "<frozen", "<string>",
+            "unittest/loader", "unittest/runner", "unittest/case", "unittest/suite"
+        ])
+
     for line in reversed(lines):
         for pattern in patterns:
             match = re.search(pattern, line)
@@ -95,6 +102,8 @@ def get_error_metadata(stderr: str):
                     candidate_file = groups[0]
                     candidate_line = next((int(g) for g in groups[1:] if g.isdigit()), None)
                     if candidate_line is not None:
+                        if is_stdlib_file(candidate_file):
+                            continue
                         found_file = candidate_file
                         found_line = candidate_line
                         if os.path.exists(found_file):
@@ -245,9 +254,12 @@ def run_command_with_watch(command: str) -> int:
     print(f"\n[DevDeck Active Watch] Executing: {command} (Autonomy Policy: {policy.level.value})")
     print("=" * 65)
     env = os.environ.copy()
+    py_paths = [str(root.resolve())]
     if (root / "src").is_dir():
-        src_path = str((root / "src").resolve())
-        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+        py_paths.append(str((root / "src").resolve()))
+    if env.get("PYTHONPATH"):
+        py_paths.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(py_paths)
 
     process = subprocess.Popen(
         command,
