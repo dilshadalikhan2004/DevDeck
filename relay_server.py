@@ -169,20 +169,28 @@ async def relay(websocket):
                     
                     def on_sandbox_line(line: str):
                         print(f"  [Sandbox] {line}")
-                        asyncio.create_task(broadcast({"type": "sandbox_line", "line": line}))
+                        if main_loop and main_loop.is_running():
+                            asyncio.run_coroutine_threadsafe(broadcast({"type": "sandbox_line", "line": line}), main_loop)
 
-                    proof, trust = SandboxVerifier.verify_patch(
-                        project_root=project_root,
-                        command=cmd_to_rerun or "pytest",
-                        patch_type=patch_type,
-                        target_file=target_file,
-                        line_num=data.get("line"),
-                        repair_code=repair_code,
-                        diff_text=diff_text,
-                        allowed_symbols=allowed_symbols,
-                        expected_sha256=expected_sha256,
-                        progress_callback=on_sandbox_line,
-                    )
+                    try:
+                        proof, trust = await asyncio.to_thread(
+                            SandboxVerifier.verify_patch,
+                            project_root=project_root,
+                            command=cmd_to_rerun or "pytest",
+                            patch_type=patch_type,
+                            target_file=target_file,
+                            line_num=data.get("line"),
+                            repair_code=repair_code,
+                            diff_text=diff_text,
+                            allowed_symbols=allowed_symbols,
+                            expected_sha256=expected_sha256,
+                            progress_callback=on_sandbox_line,
+                        )
+                    except Exception as ver_err:
+                        print(f"❌ [Relay] Sandbox execution error: {ver_err}")
+                        from sandbox_verifier import RepairProof, TrustBreakdown
+                        proof = RepairProof(False, 1, 0, "", f"Sandbox error: {ver_err}")
+                        trust = TrustBreakdown(0, "CRITICAL_RISK", 0, 0, 0, 0, [str(ver_err)])
 
                     await broadcast({"type": "sandbox_done"})
 

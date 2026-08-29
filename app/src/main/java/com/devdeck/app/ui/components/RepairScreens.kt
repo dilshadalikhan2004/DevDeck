@@ -38,39 +38,39 @@ fun RepairTimelineScreen(
     sandboxLines: List<String> = emptyList(),
     sandboxRunning: Boolean = true
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
-        HeaderSection(incidentId ?: "ACTIVE-INCIDENT")
+    Box(modifier = Modifier.fillMaxSize()) {
+        ScanlineOverlay()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            HeaderSection(incidentId ?: "ACTIVE-INCIDENT")
 
-        TimelineStep(
-            title = "Failure Captured",
-            description = "Runtime exception intercepted and isolated by DevDeck CLI.",
-            isComplete = true
-        )
-
-        TimelineStep(
-            title = "Context & Evidence Pack",
-            description = "Abstract Syntax Tree parsed; relevant symbols retrieved from Project Brain.",
-            isComplete = true
-        )
-
-        TimelineStep(
-            title = "Sandbox Verification",
-            description = if (sandboxRunning) "Executing test suite in isolated shadow workspace..." else "Sandbox integrity & regression checks verified.",
-            isActive = sandboxRunning,
-            isComplete = !sandboxRunning,
-            terminalContent = if (sandboxLines.isNotEmpty()) sandboxLines.takeLast(6) else listOf(
-                "$ npm run test:sandbox",
-                "> Isolated workspace created",
-                "PASS tests/security/fs-readonly.spec.js",
-                "PASS tests/security/network-isolation.spec.js"
+            TimelineStep(
+                title = "Failure Captured",
+                description = "Runtime exception intercepted and isolated by DevDeck CLI.",
+                isComplete = true
             )
-        )
+
+            TimelineStep(
+                title = "Context & Evidence Pack",
+                description = if (incidentId == null) "Gathering local files..." else "Analysis complete.",
+                isComplete = true
+            )
+
+            TimelineStep(
+                title = "Sandbox Verification",
+                description = if (sandboxRunning) "Executing test suite in isolated shadow workspace..." else "Sandbox integrity & regression checks verified.",
+                isActive = sandboxRunning,
+                isComplete = !sandboxRunning,
+                terminalContent = if (sandboxLines.isNotEmpty()) sandboxLines.takeLast(10) else listOf(
+                    "> Waiting for sandbox initialization..."
+                )
+            )
+        }
     }
 }
 

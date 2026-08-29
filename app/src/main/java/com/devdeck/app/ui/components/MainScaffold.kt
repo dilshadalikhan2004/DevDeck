@@ -17,6 +17,7 @@ import com.devdeck.app.pipeline.PipelineOutcome
 import com.devdeck.app.ui.AppScreen
 import com.devdeck.app.ui.AppState
 import com.devdeck.app.ui.MainViewModel
+import com.devdeck.app.ui.RepairState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

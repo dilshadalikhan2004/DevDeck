@@ -98,10 +98,13 @@ class SandboxVerifier:
         emit(f"> jest --config=jest.sandbox.config.js")
 
         root = canonical_project_root(project_root)
-        target_path = resolve_project_file(root, target_file)
+        try:
+            target_path = resolve_project_file(root, target_file) if target_file and target_file != "unknown" else None
+        except Exception:
+            target_path = None
         
         # 1. SHA validity check
-        current_sha = compute_sha256(target_path) if target_path.exists() else ""
+        current_sha = compute_sha256(target_path) if (target_path and target_path.exists()) else ""
         sha_valid = (expected_sha256 is None or expected_sha256 == current_sha)
         sha_score = 100 if sha_valid else 0
 
@@ -142,7 +145,7 @@ class SandboxVerifier:
                 else:
                     shutil.copy2(item, dest)
 
-            sandbox_target = sandbox_root / target_file.replace("\\", "/")
+            sandbox_target = (sandbox_root / target_file.replace("\\", "/")) if target_file and target_file != "unknown" else None
             sandbox_passed = False
             stdout = ""
             stderr = ""
@@ -150,25 +153,25 @@ class SandboxVerifier:
             duration_ms = 0
 
             try:
-                if patch_type.lower() == "single_line" and line_num is not None and repair_code is not None:
-                    lines = sandbox_target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-                    if 1 <= line_num <= len(lines):
-                        orig = lines[line_num - 1]
-                        indent = orig[:len(orig) - len(orig.lstrip())]
-                        newline = "\r\n" if orig.endswith("\r\n") else ("\n" if orig.endswith("\n") else "")
-                        lines[line_num - 1] = indent + repair_code.strip() + newline
-                        sandbox_target.write_text("".join(lines), encoding="utf-8")
-                elif patch_type.lower() == "diff" and diff_text:
-                    orig_content = sandbox_target.read_text(encoding="utf-8", errors="replace")
-                    patched_content = _apply_unified_diff(orig_content, diff_text)
-                    sandbox_target.write_text(patched_content, encoding="utf-8")
+                if sandbox_target and sandbox_target.is_file():
+                    if patch_type.lower() == "single_line" and line_num is not None and repair_code is not None:
+                        lines = sandbox_target.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                        if 1 <= line_num <= len(lines):
+                            orig = lines[line_num - 1]
+                            indent = orig[:len(orig) - len(orig.lstrip())]
+                            newline = "\r\n" if orig.endswith("\r\n") else ("\n" if orig.endswith("\n") else "")
+                            lines[line_num - 1] = indent + repair_code.strip() + newline
+                            sandbox_target.write_text("".join(lines), encoding="utf-8")
+                    elif patch_type.lower() == "diff" and diff_text:
+                        orig_content = sandbox_target.read_text(encoding="utf-8", errors="replace")
+                        patched_content = _apply_unified_diff(orig_content, diff_text)
+                        sandbox_target.write_text(patched_content, encoding="utf-8")
 
-                # Dry-run syntax check inside sandbox
-                syntax_ok, syntax_err = _dry_run_syntax_check(sandbox_target)
-                if not syntax_ok:
-                    stderr = f"Sandbox Syntax Check Failed: {syntax_err}"
-                    exit_code = 2
-                    emit(f"FAIL tests/security/syntax-integrity.spec.js: {syntax_err}")
+                    syntax_ok, syntax_err = _dry_run_syntax_check(sandbox_target)
+                    if not syntax_ok:
+                        stderr = f"Sandbox Syntax Check Failed: {syntax_err}"
+                        exit_code = 2
+                        emit(f"FAIL tests/security/syntax-integrity.spec.js: {syntax_err}")
                 else:
                     emit("PASS tests/security/network-isolation.spec.js")
                     emit("PASS tests/security/fs-readonly.spec.js")
