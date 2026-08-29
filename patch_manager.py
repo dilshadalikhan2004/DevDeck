@@ -6,13 +6,14 @@ import hashlib
 import re
 from pathlib import Path
 from datetime import datetime
+from sandbox_runner import SandboxRunner
 
 class PatchManager:
     def __init__(self, backup_dir=".devdeck/snapshots"):
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
-    def apply_repair(self, data, last_command):
+    def apply_repair(self, data, last_command, project_root=None):
         patch_type = data.get("patch_type", "single_line")
         file_path = data.get("file", "")
 
@@ -23,12 +24,52 @@ class PatchManager:
             else:
                 return False, f"File not found: {file_path}", None, None
 
+        if data.get("protocol_version") == 2 and project_root:
+            candidate, error = self._candidate_content(data, file_path)
+            if error:
+                return False, error, file_path, None
+            if not last_command:
+                return False, "Sandbox verification requires the incident command", file_path, None
+            try:
+                relative_file = Path(file_path).resolve().relative_to(Path(project_root).resolve()).as_posix()
+            except ValueError:
+                return False, "Repair target is outside the sandbox project root", file_path, None
+            result = SandboxRunner(project_root).verify(relative_file, candidate, last_command)
+            if not result.passed:
+                detail = "sandbox timeout" if result.timed_out else f"exit code {result.exit_code}"
+                return False, f"Sandbox verification failed: {detail}", file_path, None
+
         if patch_type == "single_line":
             return self.apply_single_line_repair(data, last_command, file_path)
         elif patch_type == "diff":
             return self.apply_diff_patch(data, last_command, file_path)
         else:
             return False, f"Unknown patch_type: {patch_type}", None, None
+
+    def _candidate_content(self, data, file_path):
+        try:
+            original = Path(file_path).read_text(encoding="utf-8")
+        except OSError as error:
+            return None, str(error)
+
+        if data.get("patch_type", "single_line") == "single_line":
+            line_num = data.get("line")
+            new_code = data.get("code", "")
+            lines = original.splitlines(keepends=True)
+            if not line_num or not new_code or not 1 <= line_num <= len(lines):
+                return None, "Invalid single-line payload"
+            old_line = lines[line_num - 1]
+            indent = old_line[:len(old_line) - len(old_line.lstrip())]
+            lines[line_num - 1] = f"{indent}{new_code.strip()}\n"
+            return "".join(lines), None
+
+        if data.get("patch_type") == "diff":
+            patched = self._apply_unified_diff(original, data.get("diff_text", ""))
+            if patched is None:
+                return None, "Built-in diff application failed"
+            return patched, None
+
+        return None, f"Unknown patch_type: {data.get('patch_type')}"
 
     def apply_single_line_repair(self, data, last_command, file_path):
         line_num = data.get("line")

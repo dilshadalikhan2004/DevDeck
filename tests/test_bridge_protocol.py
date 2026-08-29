@@ -4,7 +4,7 @@ from pathlib import Path
 
 from bridge_protocol import RepairRequest
 from devdeck import build_incident_payload
-from relay_server import repair_for_incident
+from relay_server import repair_for_incident, sandbox_project_root
 
 
 def valid_payload():
@@ -51,6 +51,11 @@ class BridgeProtocolTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "outside trusted project root"):
                 repair_for_incident(payload, {incident["incident_id"]: incident})
+
+    def test_sandbox_uses_only_the_captured_project_root(self):
+        incident = {"project_root": "C:/trusted/project"}
+
+        self.assertEqual("C:/trusted/project", sandbox_project_root(incident))
 
     def test_incident_payload_uses_a_uuid_and_project_relative_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
