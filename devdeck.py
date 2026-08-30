@@ -149,9 +149,9 @@ def detect_language(file_path: str | None) -> str:
 def _is_stdlib_frame(path: str) -> bool:
     norm = path.replace("\\", "/").lower()
     return any(x in norm for x in [
-        "lib/unittest", "lib\\unittest", "site-packages", "importlib", "<frozen", "<string>",
+        "lib/unittest", "lib\\unittest", "site-packages", "node_modules", "importlib", "<frozen", "<string>",
         "unittest/loader", "unittest/runner", "unittest/case", "unittest/suite",
-        "/lib/python", "\\lib\\python",
+        "/lib/python", "\\lib\\python", "node:internal",
     ])
 
 
@@ -202,11 +202,11 @@ def is_cli_invocation_error(command: str) -> bool:
 def get_error_metadata(stderr: str, project_root: str | Path | None = None, command: str = ""):
     patterns = [
         r'File "(.*?)", line (\d+)',
-        r'at (?:[^\(\n]+\()?([a-zA-Z0-9_\-\./\\]+\.(?:js|ts|jsx|tsx|mjs)):(\d+)',
-        r'([a-zA-Z0-9_\-\./\\]+\.(?:kt|java|cpp|c|rs|go)):(?:(?:\()?(\d+)(?:,\s*\d+\))?|(\d+):\d+)',
-        r'\(([a-zA-Z0-9_\-]+\.(?:java|kt)):(\d+)\)',
-        r'(?:-->|panicked at .*?,\s*)([a-zA-Z0-9_\-\./\\]+\.rs):(\d+)',
-        r'([a-zA-Z0-9_\-\./\\]+\.(?:py|js|ts|kt|java|cpp|c|rs|go|rb|php)):(\d+)',
+        r'at (?:[^\(\n]+\()?([a-zA-Z0-9_\-\./\\ ]+\.(?:js|ts|jsx|tsx|mjs)):(\d+)',
+        r'([a-zA-Z0-9_\-\./\\ ]+\.(?:kt|java|cpp|c|rs|go)):(?:(?:\()?(\d+)(?:,\s*\d+\))?|(\d+):\d+)',
+        r'\(([a-zA-Z0-9_\- ]+\.(?:java|kt)):(\d+)\)',
+        r'(?:-->|panicked at .*?,\s*)([a-zA-Z0-9_\-\./\\ ]+\.rs):(\d+)',
+        r'([a-zA-Z0-9_\-\./\\ ]+\.(?:py|js|ts|kt|java|cpp|c|rs|go|rb|php)):(\d+)',
     ]
 
     root = Path(project_root).resolve() if project_root else Path.cwd()
