@@ -399,6 +399,86 @@ def scan_repository(project_root: str | Path | None = None) -> None:
     }))
 
 
+def extract_repo_slug(url_or_path: str) -> str:
+    """Extract a clean folder name/slug from a git URL or local path."""
+    raw = url_or_path.strip().rstrip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    # Handle git@github.com:owner/repo or https://github.com/owner/repo
+    if ":" in raw and not (len(raw) > 1 and raw[1] == ":"):  # Not Windows drive letter C:
+        parts = raw.split(":")[-1].split("/")
+    else:
+        parts = raw.replace("\\", "/").split("/")
+    slug = parts[-1] if parts and parts[-1] else "linked_repo"
+    # Keep only safe filename chars
+    return re.sub(r"[^\w.-]", "_", slug)
+
+
+def link_repository(repo_url: str, target_dir: str | Path | None = None) -> Path:
+    """Clone a repository shallowly (--depth=1) using system git and build the on-device Knowledge Graph."""
+    print("=" * 65)
+    print("🔗 [DevDeck] Linking Remote Repository")
+    print("=" * 65)
+
+    git_bin = shutil.which("git")
+    if not git_bin:
+        print("❌ [DevDeck] Error: 'git' command not found on PATH. Please install Git.")
+        sys.exit(1)
+
+    slug = extract_repo_slug(repo_url)
+    if target_dir:
+        dest = Path(target_dir).resolve()
+    else:
+        state_dir = Path(os.environ.get("DEVDECK_STATE_DIR", ".devdeck"))
+        dest = (state_dir / "repos" / slug).resolve()
+
+    if dest.exists() and any(dest.iterdir()):
+        print(f"• Repository already exists locally at: {dest}")
+        print("• Syncing latest changes...")
+        sync_repository(dest)
+        return dest
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"• Source: {repo_url}")
+    print(f"• Destination: {dest}")
+    print("• Executing shallow clone (depth=1, zero credential storage)...")
+
+    cmd = [git_bin, "clone", "--depth=1", repo_url, str(dest)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"❌ [DevDeck] Git clone failed (Exit Code {res.returncode}):")
+        if res.stderr:
+            print(res.stderr.strip())
+        sys.exit(res.returncode)
+
+    print("✅ Repository cloned successfully.")
+    scan_repository(dest)
+    return dest
+
+
+def sync_repository(project_root: str | Path | None = None) -> None:
+    """Pull latest updates from remote repository and refresh the on-device Knowledge Graph."""
+    root = Path(project_root or Path.cwd()).resolve()
+    print("=" * 65)
+    print(f"🔄 [DevDeck] Syncing Repository: {root}")
+    print("=" * 65)
+
+    git_bin = shutil.which("git")
+    if git_bin and (root / ".git").exists():
+        print("• Pulling latest changes from remote (git pull --ff-only)...")
+        res = subprocess.run([git_bin, "pull", "--ff-only"], cwd=str(root), capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"  {res.stdout.strip() if res.stdout else 'Already up to date.'}")
+        else:
+            print(f"  ⚠️ Warning: git pull returned code {res.returncode} (offline or divergence); indexing current local tree.")
+            if res.stderr:
+                print(f"  {res.stderr.strip()}")
+    else:
+        print("• Directory is not a git clone; indexing current files on disk.")
+
+    scan_repository(root)
+
+
 def parse_run_command(args: list[str]) -> str:
     """Join remaining argv into a command, dropping duplicated ``run`` keywords."""
     cleaned = list(args)
@@ -794,7 +874,9 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("DevDeck Transparent Repair Runtime")
         print("Usage:")
-        print("  python devdeck.py scan")
+        print("  python devdeck.py scan [path]")
+        print("  python devdeck.py link <repo_url> [target_dir]")
+        print("  python devdeck.py sync [path]")
         print("  python devdeck.py run \"<command>\"")
         print("  python devdeck.py install-hook")
         print("  python devdeck.py uninstall-hook")
@@ -806,7 +888,20 @@ if __name__ == "__main__":
 
     command_type = sys.argv[1].lower()
     if command_type == "scan":
-        scan_repository()
+        target = sys.argv[2] if len(sys.argv) > 2 else None
+        scan_repository(target)
+        sys.exit(0)
+    elif command_type in ("link", "clone"):
+        if len(sys.argv) < 3:
+            print("Usage: python devdeck.py link <repo_url> [target_dir]")
+            sys.exit(1)
+        url = sys.argv[2]
+        target = sys.argv[3] if len(sys.argv) > 3 else None
+        link_repository(url, target)
+        sys.exit(0)
+    elif command_type == "sync":
+        target = sys.argv[2] if len(sys.argv) > 2 else None
+        sync_repository(target)
         sys.exit(0)
     elif command_type == "install-hook":
         install_shell_hook()
