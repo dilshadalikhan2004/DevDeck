@@ -1,8 +1,23 @@
 # DevDeck Pocket
 
-**An On-Device AI Local Debugging Co-Pilot & Autonomous Code Repair Engine**
+**An On-Device AI Local Debugging Co-Pilot, Knowledge Graph & Autonomous Code Repair Engine**
 
-DevDeck Pocket intercepts failed developer commands (tests, builds, scripts), transfers the error trace and source context over a local WebSocket bridge to an Android device (e.g. iQOO running MediaPipe Gemma-2B), diagnoses the root cause entirely on-device, synthesizes a verified single-line fix, and pushes the patch back to the host machine to automatically repair and rerun the code.
+DevDeck Pocket intercepts failed developer commands (tests, builds, scripts), transfers the error trace and AST source context over a local WebSocket bridge to an Android device (e.g. running MediaPipe Gemma-2B on NPU), diagnoses the root cause entirely on-device, synthesizes a verified single-line fix, and pushes the patch back to the host machine through a dual-gate sandbox to automatically repair and rerun the code.
+
+---
+
+## ⚡ 1-Line Universal Installer (Zero-Repo Windows Setup)
+
+Any developer can install and launch the DevDeck native pairing bridge in 10 seconds by running this in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/dilshadalikhan2004/DevDeck/main/install.ps1 | iex
+```
+
+Or install via `pip` globally:
+```bash
+pip install "git+https://github.com/dilshadalikhan2004/DevDeck.git"
+```
 
 ---
 
@@ -24,72 +39,84 @@ DevDeck Pocket intercepts failed developer commands (tests, builds, scripts), tr
 ## 🏗️ Architecture Overview
 
 ```
-[ Developer Terminal ] ──(Runs command)──> [ devdeck.py Active Watch ]
-                                                    │ (On Failure)
-                                                    ▼
-                                           [ relay_server.py ] (ws://localhost:8765)
-                                             │          │
-                     ┌───────────────────────┘          └────────────────────────┐
-                     ▼                                                           ▼
-       [ Android Device (DevDeck) ]                                [ Web Command Center ]
-       • Local Gemma-2B NPU Inference                              • Live Incident Stream
-       • Token Grounding Guardrail                                 • Real-Time Telemetry (TPS/RAM)
-       • Heuristic Safety Synthesizer                              • Manual/Automated Trigger
-                     │
-                     ▼ (Verified Patch Payload)
-       [ relay_server.py ] ──> Creates .bak ──> Writes Patch ──> Verifies Disk ──> Reruns Command
-                                                                                       │
-                                                                   ┌───────────────────┴──────────────┐
-                                                                   ▼                                  ▼
-                                                            [ EXIT CODE 0 ]                    [ FAIL / TIMEOUT ]
-                                                            ✅ Success Broadcast              📦 Auto Rollback .bak
+                               ┌────────────────────────────────────────┐
+                               │       Developer Laptop / Terminal      │
+                               └────────────────────────────────────────┘
+                                 │                                    │
+               devdeck run / terminal hook                 devdeck scan / devdeck link
+                                 │                                    │
+                                 ▼                                    ▼
+                      ┌──────────────────────┐             ┌─────────────────────┐
+                      │ Crash Trace Capture  │             │ AST Knowledge Graph │
+                      │ & Subprocess Guard   │             │ (Symbols/Call Graph)│
+                      └──────────────────────┘             └─────────────────────┘
+                                 │                                    │
+                                 └───────────────┬────────────────────┘
+                                                 ▼
+                                     ┌───────────────────────┐
+                                     │   DevDeck Relay Host  │  (Port 8765 / 8766)
+                                     │  (USB ADB / Wi-Fi WS) │
+                                     └───────────────────────┘
+                                                 │
+                                                 │ Encrypted WebSocket
+                                                 ▼
+                                     ┌───────────────────────┐
+                                     │ Android DevDeck Phone │
+                                     │ • Gemma-2B On-Device  │
+                                     │ • Token Grounding     │
+                                     │ • Heuristic Engine    │
+                                     │ • Incident Memory     │
+                                     └───────────────────────┘
+                                                 │
+                                                 │ Synthesized Patch Payload
+                                                 ▼
+                                     ┌───────────────────────┐
+                                     │   Two-Gate Sandbox    │
+                                     │   1. Isolated Temp Dir│
+                                     │   2. Working Copy Bak │
+                                     └───────────────────────┘
+                                                 │
+                                       ┌─────────┴─────────┐
+                                       ▼                   ▼
+                                 [ SUCCESS ✅ ]       [ FAILURE ❌ ]
+                                 Applied & Rerun      Git Auto-Rollback
 ```
 
 ---
 
-## ⚡ Key Features
+## ⚡ Key CLI Commands
 
-1. **🔒 100% Local & Private**: All AI inference runs on the phone's NPU/GPU using MediaPipe GenAI. No proprietary code or trace logs leave the local network.
-2. **🛡️ Semantic Grounding Guardrails**: Strictly validates AI token output; rejects hallucinated variable names and handles language keywords & f-strings without false positives.
-3. **🔄 Transactional Patch & Rollback Engine**: The relay server automatically creates `.bak` copies, verifies line count integrity, reruns failed commands, and immediately rolls back if the fix is incorrect.
-4. **📊 Dual-Tier Intelligence**: High-accuracy few-shot prompt for on-device Gemma-2B + deterministic `HeuristicDiagnosticEngine` covering `TypeError`, `AttributeError`, `KeyError`, `ZeroDivisionError`, `NPE`, and `IndexError`.
-5. **💻 Web Command Center**: Live web dashboard in `office-kit-dashboard/index.html` displaying real-time telemetry, incident replays, and audit trails.
-
-### Two-gate repair verification
-
-For protocol-v2 repairs, DevDeck first tests the candidate patch in a temporary local copy of the trusted project. Only a passing candidate reaches the working copy, where DevDeck repeats verification and can restore its snapshot if the live environment differs. This is a local temporary-directory sandbox for small projects, not a container or virtual machine.
+| Command | Description |
+| :--- | :--- |
+| `devdeck pair` | ⚡ Starts pairing bridge, prints ASCII QR, and opens live browser portal |
+| `devdeck scan [path]` | 🧠 Indexes local codebase symbols and dependencies into Knowledge Graph |
+| `devdeck link <repo_url>` | 🌐 Shallow-clones remote GitHub repo and syncs graph to phone |
+| `devdeck sync [path]` | 🔄 Pulls git delta changes and updates Knowledge Graph |
+| `devdeck run "<command>"` | 🛡️ Intercepts crashes, streams trace to phone, and auto-repairs |
+| `devdeck install-hook` | 🔌 Installs background shell hook for automatic failure capture |
+| `devdeck doctor` | 🩺 Diagnoses network connectivity, ADB reverse, and pairing state |
 
 ---
 
-## 🚀 Quickstart & Demo Flow
+## 🔒 Security & Sandboxing
 
-### 1. Setup Host Relay & Dependencies
+1. **100% Local & Offline**: All AI inference runs strictly on the phone's NPU/GPU using MediaPipe GenAI. Code never leaves your local network.
+2. **Two-Gate Repair Verification**: Before applying any patch, DevDeck tests candidate diffs in an isolated temporary directory sandbox. Only passing candidates reach the working directory.
+3. **Transactional Git Rollback**: The host engine creates backup snapshots and automatically rolls back if tests or syntax checks fail after patching.
+4. **Token Grounding Guardrail**: Strictly verifies that output tokens belong to the grounded source context, eliminating hallucinations.
+
+---
+
+## 🚀 Development & Testing
+
 ```bash
-pip install websockets
-python relay_server.py
+# Run unit test suite (45+ tests)
+python -m unittest discover -s tests -p "test_*.py"
+
+# Build standalone Windows GUI executable
+pyinstaller --onefile --windowed --name "DevDeck" devdeck_gui.py
+
+# Launch Android unit tests
+./gradlew testDebugUnitTest
 ```
 
-### 2. Connect Your Device (USB or Wi-Fi)
-- **USB with ADB (Recommended)**:
-  ```bash
-  adb reverse tcp:8765 tcp:8765
-  ```
-  *(Retain `ws://localhost:8765` in the Android app)*
-- **Wi-Fi**: Connect phone to the same network and enter `ws://<YOUR_LAPTOP_IP>:8765` in app settings.
-
-### 3. Open Web Dashboard (Optional)
-Open [`office-kit-dashboard/index.html`](file:///c:/Users/LENOVO/Downloads/receipts-android/office-kit-dashboard/index.html) in your browser for real-time telemetry and logs.
-
-### 4. Run Automated Repair Verification
-```bash
-python verify_repair.py
-```
-*Watch `target_bug.py` get caught, diagnosed on your phone, patched autonomously, and rerun to exit code 0.*
-
-### 5. Run Arbitrary Commands Through DevDeck
-```bash
-python devdeck.py run "pytest"
-python devdeck.py run "python test_errors.py typeerror"
-python devdeck.py run "python test_errors.py attributeerror"
-python devdeck.py demo
-```
