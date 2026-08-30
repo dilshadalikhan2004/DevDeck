@@ -252,19 +252,51 @@ fun RepairReviewScreen(
 
             when (pipeline?.outcome) {
                 PipelineOutcome.COMPLETE -> {
-                    Text("Fix applied and verified on the real files.", color = Color(0xFF006e28), fontWeight = FontWeight.Bold)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 24.dp)) {
+                        Text("Fix applied and verified on the real files.", color = Color(0xFF006e28), fontWeight = FontWeight.Bold)
+                        OutlinedButton(
+                            onClick = { showChanges = true },
+                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("REVISE / REQUEST FURTHER CHANGES", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
                 PipelineOutcome.ROLLED_BACK -> {
-                    Text(
-                        pipeline.failureSummary ?: "Apply was rolled back. Real files restored.",
-                        color = Color(0xFFBA1A1A),
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 24.dp)) {
+                        Text(
+                            pipeline.failureSummary ?: "Apply was rolled back. Real files restored.",
+                            color = Color(0xFFBA1A1A),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(
+                                onClick = onReject,
+                                modifier = Modifier.weight(1f).height(48.dp),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { Text("DISCARD", fontWeight = FontWeight.Bold) }
+                            Button(
+                                onClick = { showChanges = true },
+                                modifier = Modifier.weight(1f).height(48.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0059b5))
+                            ) { Text("REQUEST CHANGES", fontWeight = FontWeight.Bold) }
+                        }
+                    }
                 }
                 PipelineOutcome.REJECTED -> {
-                    Text("Candidate discarded. No files were changed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 24.dp)) {
+                        Text("Candidate discarded. No files were changed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Button(
+                            onClick = { showChanges = true },
+                            modifier = Modifier.fillMaxWidth().height(44.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0059b5))
+                        ) { Text("TRY NEW AI PROMPT", fontWeight = FontWeight.Bold) }
+                    }
                 }
-                PipelineOutcome.AWAITING_REVIEW -> {
+                PipelineOutcome.AWAITING_REVIEW, null -> {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 24.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             OutlinedButton(
@@ -274,7 +306,7 @@ fun RepairReviewScreen(
                             ) { Text("REJECT", fontWeight = FontWeight.Bold) }
                             OutlinedButton(
                                 onClick = { showChanges = true },
-                                enabled = pipeline.correctionCapReached.not(),
+                                enabled = pipeline?.correctionCapReached?.not() ?: true,
                                 modifier = Modifier.weight(1f).height(48.dp),
                                 shape = RoundedCornerShape(10.dp)
                             ) { Text("REQUEST CHANGES", fontWeight = FontWeight.Bold) }
@@ -289,11 +321,13 @@ fun RepairReviewScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Icon(Icons.Default.Bolt, null, modifier = Modifier.size(18.dp))
                         }
-                        Text(
-                            "Correction rounds: ${pipeline.correctionRounds} / ${PipelineReducer.MAX_CORRECTION_ROUNDS}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (pipeline != null) {
+                            Text(
+                                "Correction rounds: ${pipeline.correctionRounds} / ${PipelineReducer.MAX_CORRECTION_ROUNDS}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
                 else -> {}
