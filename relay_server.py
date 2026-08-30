@@ -751,9 +751,13 @@ async def main():
         await asyncio.Future()  # Run forever
 
 
-if __name__ == "__main__":
+def entry_point():
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n[Relay] Server shut down.")
+
+
+if __name__ == "__main__":
+    entry_point()
 

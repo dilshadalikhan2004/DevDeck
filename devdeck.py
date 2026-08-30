@@ -870,30 +870,38 @@ def doctor() -> None:
     print("=" * 65)
 
 
-if __name__ == "__main__":
+def cli_entry():
     if len(sys.argv) < 2:
         print("DevDeck Transparent Repair Runtime")
         print("Usage:")
-        print("  python devdeck.py scan [path]")
-        print("  python devdeck.py link <repo_url> [target_dir]")
-        print("  python devdeck.py sync [path]")
-        print("  python devdeck.py run \"<command>\"")
-        print("  python devdeck.py install-hook")
-        print("  python devdeck.py uninstall-hook")
-        print("  python devdeck.py hook-status")
-        print("  python devdeck.py doctor")
-        print("  python devdeck.py replay <incident_id>")
-        print("  python devdeck.py policy [suggest | approve | low-risk | auto]")
+        print("  devdeck relay              # Start WebSocket/HTTP bridge & QR portal")
+        print("  devdeck scan [path]        # Index local codebase into Knowledge Graph")
+        print("  devdeck link <repo_url>    # Clone & link remote GitHub repo")
+        print("  devdeck sync [path]        # Sync changes and update Knowledge Graph")
+        print("  devdeck run \"<command>\"    # Watch and auto-repair command failures")
+        print("  devdeck install-hook       # Auto-capture failures in shell")
+        print("  devdeck uninstall-hook     # Remove shell auto-capture")
+        print("  devdeck hook-status        # Check shell hook status")
+        print("  devdeck doctor             # Diagnose pairing and environment")
+        print("  devdeck replay <id>        # Replay incident")
+        print("  devdeck policy [level]     # Get/set autonomy policy")
         sys.exit(1)
 
     command_type = sys.argv[1].lower()
-    if command_type == "scan":
+    if command_type in ("relay", "bridge", "server"):
+        from relay_server import main as run_relay
+        try:
+            asyncio.run(run_relay())
+        except KeyboardInterrupt:
+            print("\n[Relay] Server shut down.")
+        sys.exit(0)
+    elif command_type == "scan":
         target = sys.argv[2] if len(sys.argv) > 2 else None
         scan_repository(target)
         sys.exit(0)
     elif command_type in ("link", "clone"):
         if len(sys.argv) < 3:
-            print("Usage: python devdeck.py link <repo_url> [target_dir]")
+            print("Usage: devdeck link <repo_url> [target_dir]")
             sys.exit(1)
         url = sys.argv[2]
         target = sys.argv[3] if len(sys.argv) > 3 else None
@@ -918,17 +926,17 @@ if __name__ == "__main__":
     elif command_type == "run":
         command_str = parse_run_command(sys.argv[2:])
         if not command_str:
-            print("Usage: python devdeck.py run \"<command>\"")
+            print("Usage: devdeck run \"<command>\"")
             print("Unquoted arguments are joined, and extra 'run' keywords are ignored.")
             asyncio.run(send_event({
                 "type": "error",
-                "message": "Missing command after 'run'. Example: python devdeck.py run python -m unittest",
+                "message": "Missing command after 'run'. Example: devdeck run python -m unittest",
             }))
             sys.exit(1)
         sys.exit(run_command_with_watch(command_str))
     elif command_type == "replay":
         if len(sys.argv) < 3:
-            print("Usage: python devdeck.py replay <incident_id>")
+            print("Usage: devdeck replay <incident_id>")
             sys.exit(1)
         replay_incident(sys.argv[2])
         sys.exit(0)
@@ -949,3 +957,7 @@ AttributeError: 'NoneType' object has no attribute 'is_authenticated'"""
     else:
         # Default fallback to run
         sys.exit(run_command_with_watch(" ".join(sys.argv[1:])))
+
+
+if __name__ == "__main__":
+    cli_entry()
