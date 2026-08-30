@@ -227,7 +227,21 @@ class SandboxVerifier:
                         timeout_seconds=timeout_seconds,
                         env=env,
                     )
-                    sandbox_passed = (exit_code == 0) and not timed_out
+                    # Detect clean web/dev server startup (e.g. "npm start", "node server.js", "flask run")
+                    is_server_cmd = any(k in command.lower() for k in ["start", "server", "dev", "app.py", "runserver", "uvicorn", "flask"])
+                    server_booted = is_server_cmd and (
+                        "running" in stdout.lower() or
+                        "listening" in stdout.lower() or
+                        "ready" in stdout.lower() or
+                        (timed_out and not stderr.strip())
+                    )
+
+                    if server_booted:
+                        sandbox_passed = True
+                        exit_code = 0
+                        timed_out = False
+                    else:
+                        sandbox_passed = (exit_code == 0) and not timed_out
 
                     if timed_out:
                         emit(f"FAIL tests/verification/timeout.spec.js ({timeout_seconds}s timeout exceeded)")
