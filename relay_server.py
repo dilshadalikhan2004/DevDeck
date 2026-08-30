@@ -48,6 +48,7 @@ STATE_DIR = os.environ.get("DEVDECK_STATE_DIR", ".devdeck")
 pairing_registry = PairingRegistry(os.path.join(STATE_DIR, "pairing_state.json"))
 PAIRING_SECRET = os.environ.get("DEVDECK_PAIRING_SECRET", "DECK-POCKET-SAFE")
 current_pairing_data = {}
+last_brain_data = None
 
 
 def generate_pairing_html(pairing_data: dict) -> str:
@@ -190,6 +191,10 @@ async def relay(websocket):
                             "host": socket.gethostname(),
                             "system": platform.system(),
                         }))
+                        # Deliver cached Project Brain if available
+                        if last_brain_data:
+                            print(f"🧠 [Relay] Syncing cached Project Brain to newly paired device ({last_brain_data.get('files_indexed')} files)")
+                            await websocket.send(json.dumps(last_brain_data))
                     else:
                         print(f"❌ [Relay] Client {addr} failed authentication.")
                         await websocket.send(json.dumps({"type": "pair_result", "success": False, "error": "Invalid secret or expired token"}))
@@ -206,6 +211,8 @@ async def relay(websocket):
 
                 # 1.2 Brain Ready Event
                 if msg_type == "brain_ready":
+                    global last_brain_data
+                    last_brain_data = data
                     print(f"🧠 [Relay] Project Brain Ready ({data.get('files_indexed')} files, {data.get('symbols_indexed')} symbols)")
                     await broadcast(data, exclude=websocket)
                     continue
@@ -625,6 +632,20 @@ class HookHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(b'{"status":"accepted","dispatched":true}')
+        elif self.path in ("/brain", "/brain/"):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode("utf-8", errors="replace")
+            try:
+                data = json.loads(body) if body else {}
+                global last_brain_data
+                last_brain_data = data
+                if main_loop and main_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(broadcast(data), main_loop)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b'{"status":"accepted","brain_synced":true}')
             except Exception as e:
                 self.send_response(400)
                 self.end_headers()

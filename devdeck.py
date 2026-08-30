@@ -385,8 +385,8 @@ def scan_repository(project_root: str | Path | None = None) -> None:
         print(f"  Sample Tests: {', '.join(summary['tests'][:3])}")
     print("=" * 65)
 
-    # Broadcast brain ready event to relay server
-    asyncio.run(send_event({
+    # Broadcast brain ready event to relay server via both WebSocket & HTTP
+    payload = {
         "type": "brain_ready",
         "timestamp": datetime.now().isoformat(),
         "project_root": str(root),
@@ -396,7 +396,22 @@ def scan_repository(project_root: str | Path | None = None) -> None:
         "tests": summary["tests"],
         "sample_symbols": summary.get("sample_symbols") or sorted(brain.symbols.keys())[:30],
         "edges": summary.get("edges", []),
-    }))
+    }
+    try:
+        asyncio.run(send_event(payload))
+    except Exception:
+        pass
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "http://127.0.0.1:8766/brain",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            pass
+    except Exception:
+        pass
 
 
 def extract_repo_slug(url_or_path: str) -> str:
