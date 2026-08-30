@@ -12,6 +12,8 @@ import re
 import os
 import hashlib
 import uuid
+import shutil
+import socket
 from pathlib import Path
 
 from bridge_security import canonical_project_root, sha256_file
@@ -275,7 +277,23 @@ def get_error_metadata(stderr: str, project_root: str | Path | None = None, comm
         except Exception as e:
             print(f"[DevDeck] Error reading source file: {e}")
 
+    if not original_line:
+        original_line = _source_line_from_traceback(stderr)
+
     return context, found_file, found_line, original_line
+
+
+def _source_line_from_traceback(stderr: str) -> str | None:
+    """Pull the source line Python printed under File ..., line N."""
+    rows = stderr.splitlines()
+    best = None
+    file_re = re.compile(r'File "[^"]+", line \d+')
+    for i, row in enumerate(rows):
+        if file_re.search(row) and i + 1 < len(rows):
+            nxt = rows[i + 1].strip()
+            if nxt and not nxt.startswith("File ") and not re.match(r"^\w+(Error|Exception)\b", nxt):
+                best = nxt
+    return best
 
 
 def clean_stderr(stderr: str) -> str:
@@ -340,9 +358,9 @@ def build_incident_payload(command: str, stderr: str, project_root: str | Path |
         "command": command,
         "error_text": clean_stderr(stderr),
         "source_context": source_context,
-        "error_file": relative_file,
-        "error_line": line_num,
-        "original_line": original_line,
+        "error_file": relative_file or "",
+        "error_line": int(line_num or 0),
+        "original_line": original_line or "",
         "language": detect_language(relative_file),
         "expected_sha256": expected_sha256,
         "repository_context": evidence.text,
@@ -376,7 +394,8 @@ def scan_repository(project_root: str | Path | None = None) -> None:
         "symbols_indexed": summary["symbols_indexed"],
         "tests_discovered": summary["tests_discovered"],
         "tests": summary["tests"],
-        "sample_symbols": sorted(brain.symbols.keys())[:30],
+        "sample_symbols": summary.get("sample_symbols") or sorted(brain.symbols.keys())[:30],
+        "edges": summary.get("edges", []),
     }))
 
 
@@ -735,6 +754,42 @@ def hook_status() -> None:
     print("=" * 65)
 
 
+def doctor() -> None:
+    print("=" * 65)
+    print("DevDeck doctor")
+    print("=" * 65)
+    hook_status()
+
+    adb_bin = shutil.which("adb")
+    if not adb_bin:
+        print("• ADB: not on PATH (USB fallback unavailable from this shell)")
+    else:
+        try:
+            res = subprocess.run([adb_bin, "devices"], capture_output=True, text=True, timeout=8)
+            lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip() and not ln.startswith("List")]
+            ready = [ln for ln in lines if "\tdevice" in ln or ln.endswith("device")]
+            print(f"• ADB: found ({adb_bin})")
+            print(f"  Devices: {len(ready)} ready")
+            for ln in lines[:5]:
+                print(f"    {ln}")
+        except Exception as e:
+            print(f"• ADB: error ({e})")
+
+    ws_ok = False
+    try:
+        with socket.create_connection(("127.0.0.1", 8765), timeout=1):
+            ws_ok = True
+    except Exception:
+        ws_ok = False
+    print(f"• Wi-Fi / local WebSocket 8765: {'reachable' if ws_ok else 'not reachable (start python relay_server.py)'}")
+
+    pairing = Path(os.environ.get("DEVDECK_STATE_DIR", ".devdeck")) / "pairing_state.json"
+    print(f"• Pairing state file: {'present' if pairing.is_file() else 'missing'} ({pairing})")
+    print("=" * 65)
+    print("Phone pairing is confirmed in the app (Settings → Paired Laptop), not from this file alone.")
+    print("=" * 65)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("DevDeck Transparent Repair Runtime")
@@ -744,6 +799,7 @@ if __name__ == "__main__":
         print("  python devdeck.py install-hook")
         print("  python devdeck.py uninstall-hook")
         print("  python devdeck.py hook-status")
+        print("  python devdeck.py doctor")
         print("  python devdeck.py replay <incident_id>")
         print("  python devdeck.py policy [suggest | approve | low-risk | auto]")
         sys.exit(1)
@@ -760,6 +816,9 @@ if __name__ == "__main__":
         sys.exit(0)
     elif command_type == "hook-status":
         hook_status()
+        sys.exit(0)
+    elif command_type == "doctor":
+        doctor()
         sys.exit(0)
     elif command_type == "run":
         command_str = parse_run_command(sys.argv[2:])

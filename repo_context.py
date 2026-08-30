@@ -160,6 +160,14 @@ class ProjectBrain:
         )
 
     def summary(self) -> dict:
+        edges: list[dict[str, str]] = []
+        for path, imports in self.file_imports.items():
+            for imp in sorted(imports):
+                edges.append({"src": path, "dst": imp, "kind": "import"})
+                if len(edges) >= 60:
+                    break
+            if len(edges) >= 60:
+                break
         return {
             "root": str(self.root),
             "files_indexed": self.source_files_count,
@@ -167,6 +175,8 @@ class ProjectBrain:
             "tests_discovered": len(self.tests_discovered),
             "tests": self.tests_discovered[:10],
             "rules_active": bool(self.project_rules),
+            "sample_symbols": sorted(self.symbols.keys())[:30],
+            "edges": edges,
         }
 
 

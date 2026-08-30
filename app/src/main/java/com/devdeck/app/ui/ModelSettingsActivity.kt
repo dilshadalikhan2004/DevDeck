@@ -32,8 +32,11 @@ class ModelSettingsActivity : AppCompatActivity() {
         binding.backButton.setOnClickListener { finish() }
     }
 
+    private fun catalogModels(): List<ModelConfig> =
+        modelManager.getPredefinedModels().filter { it.id != "custom" || it.isActive }
+
     private fun setupRecyclerView() {
-        val models = modelManager.getPredefinedModels()
+        val models = catalogModels()
 
         adapter = ModelListAdapter(
             models = models,
@@ -47,13 +50,51 @@ class ModelSettingsActivity : AppCompatActivity() {
 
     private fun selectModel(model: ModelConfig) {
         if (!modelManager.isModelAvailable(model.filePath)) {
-            Toast.makeText(this, "Model not found on device. Push to ${model.filePath}", Toast.LENGTH_LONG).show()
+            AlertDialog.Builder(this)
+                .setTitle("Install ${model.displayName}")
+                .setMessage(
+                    "File size about ${model.sizeGB} GB. This app does not download multi-gigabyte models over the air.\n\n" +
+                        "1. On the laptop, copy the MediaPipe .bin next to the other models.\n" +
+                        "2. adb push <file> ${model.filePath}\n" +
+                        "3. Tap Check again.\n\nCurrent path:\n${model.filePath}"
+                )
+                .setPositiveButton("Check again") { _, _ ->
+                    if (modelManager.isModelAvailable(model.filePath)) {
+                        activateAfterVerify(model)
+                    } else {
+                        Toast.makeText(this, "Still missing at ${model.filePath}", Toast.LENGTH_LONG).show()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
             return
         }
+        activateAfterVerify(model)
+    }
 
-        modelManager.setModelPath(model.filePath)
-        Toast.makeText(this, "Switched to ${model.displayName}", Toast.LENGTH_SHORT).show()
-        adapter.updateModels(modelManager.getPredefinedModels())
+    private fun activateAfterVerify(model: ModelConfig) {
+        val previous = modelManager.getCurrentModelPath()
+        binding.progressBar.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            val (success, tps, error) = modelManager.verifyModel(model.filePath)
+            binding.progressBar.visibility = View.GONE
+            if (success) {
+                modelManager.setModelPath(model.filePath, model.displayName)
+                adapter.updateModels(catalogModels())
+                Toast.makeText(
+                    this@ModelSettingsActivity,
+                    "Active: ${model.displayName} (~${tps.toInt()} tok/s). Restart diagnoses to use it.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                modelManager.setModelPath(previous)
+                AlertDialog.Builder(this@ModelSettingsActivity)
+                    .setTitle("Load failed — kept previous model")
+                    .setMessage(error ?: "The new file did not initialize. Active model was not changed.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
     }
 
     private fun verifyModel(model: ModelConfig) {
@@ -95,9 +136,9 @@ class ModelSettingsActivity : AppCompatActivity() {
                 .setPositiveButton("Set") { _, _ ->
                     val path = input.text.toString().trim()
                     if (path.isNotEmpty()) {
-                        modelManager.setModelPath(path)
+                        modelManager.setModelPath(path, com.devdeck.app.model.ModelDisplayNames.fromPath(path))
                         Toast.makeText(this, "Custom model path updated", Toast.LENGTH_SHORT).show()
-                        adapter.updateModels(modelManager.getPredefinedModels())
+                        adapter.updateModels(catalogModels())
                     }
                 }
                 .setNegativeButton("Cancel", null)

@@ -3,6 +3,7 @@ package com.devdeck.app.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.devdeck.app.model.HistoryItem
 import com.devdeck.app.model.IncidentStatus
 import com.devdeck.app.ui.AppState
+import com.devdeck.app.ui.repairHeadline
 import com.devdeck.app.ui.theme.LuminaDesign
 import java.text.SimpleDateFormat
 import java.util.*
@@ -39,7 +41,8 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun DashboardScreen(
     state: AppState,
-    onAction: (String) -> Unit
+    onAction: (String) -> Unit,
+    onOpenModels: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -53,7 +56,30 @@ fun DashboardScreen(
             .padding(bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item { StatusHeaderColumn(state = state) }
+        item { StatusHeaderColumn(state = state, onOpenModels = onOpenModels) }
+        item {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "REPAIR STATUS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 9.sp,
+                        letterSpacing = 1.5.sp
+                    )
+                    Text(
+                        repairHeadline(state),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "Same pipeline as the Repair tab. Tap the card below to open it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
         if (state.sandboxRunning || state.sandboxLines.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -114,39 +140,13 @@ fun DashboardScreen(
             }
         }
         item { RecentActionCard(modifier = Modifier.fillMaxWidth(), state = state, onViewLog = { onAction("history") }) }
-        if (state.telemetryLogs.isNotEmpty()) {
-            item {
-                GlassCard(modifier = Modifier.fillMaxWidth(), cornerRadius = 12.dp, contentPadding = 12.dp) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "LAPTOP CONSOLE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 9.sp,
-                            letterSpacing = 1.5.sp
-                        )
-                        state.telemetryLogs.takeLast(12).forEach { line ->
-                            Text(
-                                line,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        item { QuickActionGrid(onAction = onAction) }
     }
 }
 
 // ── Status Header ─────────────────────────────────────────────────────────────
 
 @Composable
-fun StatusHeaderColumn(state: AppState) {
+fun StatusHeaderColumn(state: AppState, onOpenModels: () -> Unit = {}) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -161,11 +161,18 @@ fun StatusHeaderColumn(state: AppState) {
         )
         // Model Status — green when engine ready
         StatusChip(
-            label = "MODEL STATUS",
-            value = if (state.isModelReady) "Local LLM (Ready)" else "Initializing...",
+            label = "ON-DEVICE MODEL",
+            value = when {
+                !state.isModelReady && state.modelDisplayName.isNotBlank() ->
+                    "Loading ${state.modelDisplayName}…"
+                state.isModelReady -> "${state.modelDisplayName} · Ready"
+                else -> "Initializing…"
+            },
             icon = Icons.Rounded.Psychology,
             statusColor = if (state.isModelReady) Color(0xFF006e28) else Color(0xFFE65100),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenModels)
         )
         // Active Project — blue highlight
         StatusChip(
@@ -486,52 +493,6 @@ fun RecentActionCard(
             ) {
                 Text("VIEW LOG", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, fontSize = 10.sp)
             }
-        }
-    }
-}
-
-// ── Quick Action Grid ─────────────────────────────────────────────────────────
-
-@Composable
-fun QuickActionGrid(onAction: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
-            "These run on the paired laptop. Results stream into Laptop Console above.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ExecutiveButton(
-                text = "New Shell",
-                icon = Icons.Default.Terminal,
-                onClick = { onAction("new_shell") },
-                modifier = Modifier.weight(1f),
-                caption = "Print laptop cwd & how to run CLI"
-            )
-            ExecutiveButton(
-                text = "Sync DB",
-                icon = Icons.Default.Storage,
-                onClick = { onAction("sync_db") },
-                modifier = Modifier.weight(1f),
-                caption = "Check pairing & repair memory"
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ExecutiveButton(
-                text = "Run Tests",
-                icon = Icons.Default.PlayArrow,
-                onClick = { onAction("run_tests") },
-                modifier = Modifier.weight(1f),
-                caption = "unittest discover on laptop"
-            )
-            ExecutiveButton(
-                text = "Deploy",
-                icon = Icons.Default.RocketLaunch,
-                onClick = { onAction("deploy") },
-                modifier = Modifier.weight(1f),
-                isPrimary = true,
-                caption = "Dry-run only — no publish"
-            )
         }
     }
 }

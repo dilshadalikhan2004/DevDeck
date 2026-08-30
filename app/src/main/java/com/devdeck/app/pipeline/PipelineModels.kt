@@ -136,17 +136,21 @@ data class IncidentPipeline(
         val core = DISPLAY_STAGES.map { stage ->
             nodes[stage] ?: StageSnapshot(stage)
         }
-        val terminal = when (outcome) {
-            PipelineOutcome.ROLLED_BACK -> nodes[PipelineStage.ROLLED_BACK] ?: StageSnapshot(PipelineStage.ROLLED_BACK)
+        val terminal: StageSnapshot? = when (outcome) {
+            PipelineOutcome.ROLLED_BACK ->
+                nodes[PipelineStage.ROLLED_BACK] ?: StageSnapshot(PipelineStage.ROLLED_BACK)
+            PipelineOutcome.COMPLETE ->
+                nodes[PipelineStage.COMPLETE] ?: StageSnapshot(PipelineStage.COMPLETE, NodeStatus.PASSED)
             PipelineOutcome.FAILED -> {
                 val failed = nodes.values.firstOrNull { it.status == NodeStatus.FAILED }
-                nodes[PipelineStage.ROLLED_BACK]?.takeIf { it.status != NodeStatus.PENDING }
-                    ?: failed
-                    ?: StageSnapshot(PipelineStage.COMPLETE)
+                when {
+                    failed != null && failed.stage in DISPLAY_STAGES -> null
+                    else -> nodes[PipelineStage.ROLLED_BACK]?.takeIf { it.status != NodeStatus.PENDING }
+                }
             }
-            else -> nodes[PipelineStage.COMPLETE] ?: StageSnapshot(PipelineStage.COMPLETE)
+            else -> null
         }
-        return core + terminal
+        return if (terminal == null) core else core + terminal
     }
 
     companion object {

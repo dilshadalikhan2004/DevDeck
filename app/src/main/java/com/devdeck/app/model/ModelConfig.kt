@@ -14,5 +14,7 @@ data class ModelConfig(
     val estimatedTPS: Float,
     val specialty: String,
     val tier: ModelTier,
-    val isActive: Boolean = false
+    val isActive: Boolean = false,
+    val isAvailable: Boolean = false,
+    val recommendation: String? = null
 )

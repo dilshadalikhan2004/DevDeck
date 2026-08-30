@@ -1,8 +1,12 @@
 package com.devdeck.app.ui.components
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -11,22 +15,33 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.devdeck.app.pipeline.PipelineOutcome
 import com.devdeck.app.ui.AppScreen
 import com.devdeck.app.ui.AppState
 import com.devdeck.app.ui.MainViewModel
+import com.devdeck.app.ui.RepairFilter
 import com.devdeck.app.ui.RepairState
+import com.devdeck.app.ui.matchesRepairFilter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScaffold(
     viewModel: MainViewModel,
     onLaunchScanner: () -> Unit = {},
-    onManualConnect: (String, String) -> Unit = { _, _ -> }
+    onManualConnect: (String, String) -> Unit = { _, _ -> },
+    onVoiceStop: () -> Unit = {},
+    onVoiceMute: () -> Unit = {},
+    onOpenModels: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
+
+    if (state.boot.visible) {
+        BootOverlay(boot = state.boot)
+        return
+    }
 
     // Pair Device full-screen overlay (shown over everything)
     if (state.showPairDevice) {
@@ -77,6 +92,7 @@ fun MainScaffold(
             when (state.currentScreen) {
                 AppScreen.HOME -> DashboardScreen(
                     state = state,
+                    onOpenModels = onOpenModels,
                     onAction = { action ->
                         when (action) {
                             "history" -> viewModel.setScreen(AppScreen.HISTORY)
@@ -97,7 +113,12 @@ fun MainScaffold(
                     }
                 )
 
-                AppScreen.REPAIR -> RepairWorkspace(viewModel = viewModel, state = state)
+                AppScreen.REPAIR -> RepairWorkspace(
+                    viewModel = viewModel,
+                    state = state,
+                    onVoiceStop = onVoiceStop,
+                    onVoiceMute = onVoiceMute
+                )
 
                 AppScreen.BRAIN -> BrainScreen(state = state)
 
@@ -106,7 +127,8 @@ fun MainScaffold(
                 AppScreen.SETTINGS -> SettingsScreen(
                     state = state,
                     onRepairPermissionChange = { viewModel.setRepairPermission(it) },
-                    onPairDevice = { viewModel.showPairDevice(true) }
+                    onPairDevice = { viewModel.showPairDevice(true) },
+                    onOpenModels = onOpenModels
                 )
             }
         }
@@ -114,7 +136,12 @@ fun MainScaffold(
 }
 
 @Composable
-fun RepairWorkspace(viewModel: MainViewModel, state: AppState) {
+fun RepairWorkspace(
+    viewModel: MainViewModel,
+    state: AppState,
+    onVoiceStop: () -> Unit = {},
+    onVoiceMute: () -> Unit = {}
+) {
     val pipeline = state.selectedPipeline
     Column(
         modifier = Modifier
@@ -123,8 +150,57 @@ fun RepairWorkspace(viewModel: MainViewModel, state: AppState) {
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        VoiceDebuggerPanel(
+            state = state.voice,
+            onMic = { viewModel.onMicTapped() },
+            onStop = onVoiceStop,
+            onMute = onVoiceMute,
+            onAskAgain = {
+                onVoiceStop()
+                viewModel.onAskAgain()
+            }
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            RepairFilter.entries.forEach { filter ->
+                val selected = state.repairFilter == filter
+                val label = when (filter) {
+                    RepairFilter.ALL -> "All"
+                    RepairFilter.ACTIVE -> "Active"
+                    RepairFilter.REVIEW -> "Review"
+                    RepairFilter.APPLIED -> "Applied"
+                    RepairFilter.FAILED -> "Failed"
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (selected) MaterialTheme.colorScheme.primary.copy(0.12f) else MaterialTheme.colorScheme.surface)
+                        .clickable { viewModel.setRepairFilter(filter) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        val visible = state.pipelines.incidents.filter { it.matchesRepairFilter(state.repairFilter) }
+        if (state.pipelines.incidents.isNotEmpty() && visible.isEmpty()) {
+            Text(
+                "No incidents match this filter. New crashes switch the filter back to All if needed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         LivePipelineList(
-            incidents = state.pipelines.incidents,
+            incidents = visible,
             selectedIncidentId = state.selectedIncidentId,
             selectedStage = state.selectedStage,
             onSelectIncident = { viewModel.selectIncident(it) },

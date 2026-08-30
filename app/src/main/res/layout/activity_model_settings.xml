@@ -35,6 +35,29 @@
             android:layout_marginStart="12dp" />
     </LinearLayout>
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="4dp"
+        android:text="Recommended models"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:textColor="#414753"
+        android:letterSpacing="0.04" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="8dp"
+        android:text="Use the file that is on this phone. Names below match the .bin you select — including a custom download."
+        android:textSize="13sp"
+        android:textColor="#717785" />
+
     <!-- Model List -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/modelRecyclerView"

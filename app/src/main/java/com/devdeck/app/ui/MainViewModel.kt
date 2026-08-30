@@ -3,8 +3,11 @@ package com.devdeck.app.ui
 import androidx.lifecycle.ViewModel
 import com.devdeck.app.model.DiagnosticResult
 import com.devdeck.app.model.HistoryItem
+import com.devdeck.app.voice.VoicePhase
+import com.devdeck.app.voice.VoiceUiState
 import com.devdeck.app.pipeline.EventPhase
 import com.devdeck.app.pipeline.IncidentPipeline
+import com.devdeck.app.pipeline.NodeStatus
 import com.devdeck.app.pipeline.PipelineEvent
 import com.devdeck.app.pipeline.PipelineOutcome
 import com.devdeck.app.pipeline.PipelineRegistry
@@ -30,6 +33,12 @@ data class CorrectionRequest(
     val previous: DiagnosticResult
 )
 
+data class BrainEdge(
+    val src: String,
+    val dst: String,
+    val kind: String = "import"
+)
+
 data class BrainSnapshot(
     val synced: Boolean = false,
     val filesIndexed: Int = 0,
@@ -38,8 +47,26 @@ data class BrainSnapshot(
     val projectRoot: String = "",
     val tests: List<String> = emptyList(),
     val symbolsInPlay: List<String> = emptyList(),
-    val evidenceFiles: List<String> = emptyList()
+    val evidenceFiles: List<String> = emptyList(),
+    val edges: List<BrainEdge> = emptyList()
 )
+
+data class BootState(
+    val visible: Boolean = true,
+    val line: String = "Starting…",
+    val detail: String? = null,
+    val failed: Boolean = false,
+    val modelName: String = "",
+    val step: Int = 0
+)
+
+enum class RepairFilter {
+    ALL, ACTIVE, REVIEW, APPLIED, FAILED
+}
+
+enum class HistoryStatusFilter {
+    ALL, DIAGNOSED, FIXED, FAILED
+}
 
 data class AppState(
     val currentScreen: AppScreen = AppScreen.HOME,
@@ -50,6 +77,7 @@ data class AppState(
     val trustScore: Int = 0,
     val rootCause: String? = null,
     val isModelReady: Boolean = false,
+    val modelDisplayName: String = "On-device model",
     val isRelayConnected: Boolean = false,
     val pairedDevice: String = "None",
     val cpuPercent: Int = 0,
@@ -70,7 +98,10 @@ data class AppState(
     val selectedIncidentId: String? = null,
     val selectedStage: PipelineStage? = null,
     val pendingReviewCount: Int = 0,
-    val brain: BrainSnapshot = BrainSnapshot()
+    val brain: BrainSnapshot = BrainSnapshot(),
+    val voice: VoiceUiState = VoiceUiState(),
+    val boot: BootState = BootState(),
+    val repairFilter: RepairFilter = RepairFilter.ALL
 ) {
     val selectedPipeline: IncidentPipeline?
         get() = selectedIncidentId?.let { pipelines.byId[it] }
@@ -107,6 +138,10 @@ class MainViewModel : ViewModel() {
                 pipelines = next,
                 activeIncidentId = event.incidentId,
                 selectedIncidentId = state.selectedIncidentId ?: event.incidentId,
+                selectedStage = when (event.phase) {
+                    EventPhase.FAILED, EventPhase.STARTED, EventPhase.COMPLETED -> event.stage
+                    else -> state.selectedStage
+                },
                 pendingReviewCount = next.pendingReviewCount,
                 repairState = derivedRepair,
                 currentResult = candidate?.diagnostic ?: state.currentResult,
@@ -162,13 +197,51 @@ class MainViewModel : ViewModel() {
             PipelineEvent(id, PipelineStage.SENT_TO_PHONE, EventPhase.COMPLETED, "Incident received on phone")
         )
         _uiState.update {
+            val keepFilter = it.repairFilter == RepairFilter.ALL || it.repairFilter == RepairFilter.ACTIVE
             it.copy(
                 activeIncidentId = id,
                 selectedIncidentId = id,
                 sandboxLines = emptyList(),
-                sandboxRunning = false
+                sandboxRunning = false,
+                currentScreen = AppScreen.REPAIR,
+                repairFilter = if (keepFilter) it.repairFilter else RepairFilter.ALL
             )
         }
+    }
+
+    fun setRepairFilter(filter: RepairFilter) {
+        _uiState.update { it.copy(repairFilter = filter) }
+    }
+
+    fun setBootLine(
+        line: String,
+        detail: String? = null,
+        failed: Boolean = false,
+        step: Int = 0,
+        modelName: String? = null
+    ) {
+        _uiState.update {
+            val name = modelName ?: it.boot.modelName
+            it.copy(
+                boot = BootState(
+                    visible = true,
+                    line = line,
+                    detail = detail,
+                    failed = failed,
+                    modelName = name,
+                    step = step
+                ),
+                modelDisplayName = name.ifBlank { it.modelDisplayName }
+            )
+        }
+    }
+
+    fun finishBoot() {
+        _uiState.update { it.copy(boot = it.boot.copy(visible = false)) }
+    }
+
+    fun setModelDisplayName(name: String) {
+        _uiState.update { it.copy(modelDisplayName = name.ifBlank { "On-device model" }) }
     }
 
     fun onAnalysisComplete(result: DiagnosticResult, score: Int, cause: String) {
@@ -220,6 +293,58 @@ class MainViewModel : ViewModel() {
         _uiState.value.currentResult?.let { result ->
             _repairAction.value = result
             onRepairApplied()
+        }
+    }
+
+    fun voiceApproveMessage(): String {
+        val state = _uiState.value
+        val pipeline = state.selectedPipeline
+        val result = state.currentResult
+        return when {
+            result == null ->
+                "There is no candidate to approve yet. Wait until diagnosis finishes, then say approve again or tap Approve."
+            pipeline?.outcome == PipelineOutcome.IN_PROGRESS ->
+                "Not ready. The pipeline is still running. Wait until you see sandbox review, then say approve."
+            pipeline?.outcome == PipelineOutcome.COMPLETE ->
+                "This incident is already marked complete. Nothing new to approve."
+            pipeline?.outcome == PipelineOutcome.REJECTED ->
+                "This candidate was already rejected."
+            pipeline?.outcome == PipelineOutcome.FAILED || pipeline?.outcome == PipelineOutcome.ROLLED_BACK ->
+                "This run failed or rolled back. There is nothing safe to approve from voice."
+            else -> {
+                applyRepair()
+                "Approve sent to the laptop. Watch the pipeline. Live files change only if apply succeeds."
+            }
+        }
+    }
+
+    fun voiceRejectMessage(): String {
+        val state = _uiState.value
+        val pipeline = state.selectedPipeline
+        return when {
+            pipeline == null && state.currentResult == null ->
+                "There is no candidate to reject."
+            pipeline?.outcome == PipelineOutcome.COMPLETE ->
+                "Too late to reject — this one already completed."
+            else -> {
+                rejectRepair()
+                "Rejected. No live files were changed from this voice command."
+            }
+        }
+    }
+
+    fun voiceStatusMessage(): String {
+        val state = _uiState.value
+        val pipeline = state.selectedPipeline
+        val review = state.pendingReviewCount
+        if (pipeline == null && state.pipelines.incidents.isEmpty()) {
+            return "No active incidents."
+        }
+        val stage = pipeline?.displayNodes()?.firstOrNull { it.status == NodeStatus.ACTIVE }?.summary
+        return buildString {
+            append(repairHeadline(state))
+            if (stage != null) append(" ").append(stage)
+            if (review > 0) append(" $review awaiting review.")
         }
     }
 
@@ -333,7 +458,9 @@ class MainViewModel : ViewModel() {
         symbolsIndexed: Int,
         testsDiscovered: Int,
         projectRoot: String,
-        tests: List<String>
+        tests: List<String>,
+        sampleSymbols: List<String> = emptyList(),
+        edges: List<BrainEdge> = emptyList()
     ) {
         _uiState.update {
             it.copy(
@@ -343,7 +470,9 @@ class MainViewModel : ViewModel() {
                     symbolsIndexed = symbolsIndexed,
                     testsDiscovered = testsDiscovered,
                     projectRoot = projectRoot,
-                    tests = tests
+                    tests = tests,
+                    symbolsInPlay = (sampleSymbols + it.brain.symbolsInPlay).distinct().take(40),
+                    edges = edges
                 ),
                 activeProject = projectRoot.substringAfterLast('\\').substringAfterLast('/').ifBlank { it.activeProject }
             )
@@ -404,4 +533,174 @@ class MainViewModel : ViewModel() {
     fun clearQuickAction() {
         _quickAction.value = null
     }
+
+    private val _voiceListenNonce = MutableStateFlow(0L)
+    val voiceListenNonce: StateFlow<Long> = _voiceListenNonce.asStateFlow()
+
+    fun onMicTapped() {
+        val voice = _uiState.value.voice
+        if (voice.phase is VoicePhase.Listening ||
+            voice.phase is VoicePhase.Thinking ||
+            voice.phase is VoicePhase.LoadingModel
+        ) {
+            return
+        }
+        val state = _uiState.value
+        val hasIncident = state.currentResult != null || !state.rootCause.isNullOrBlank()
+        if (!hasIncident) {
+            patchVoice(
+                voice.copy(
+                    phase = VoicePhase.Failed("No incident to discuss yet. Capture a crash first."),
+                    hasIncident = false,
+                    statusLine = "No incident loaded"
+                )
+            )
+            return
+        }
+        patchVoice(voice.copy(hasIncident = true, deck = null, you = null, partial = ""))
+        _voiceListenNonce.value = System.currentTimeMillis()
+    }
+
+    fun onAskAgain() {
+        val voice = _uiState.value.voice
+        if (voice.phase is VoicePhase.Listening || voice.phase is VoicePhase.Thinking) return
+        patchVoice(voice.copy(you = null, deck = null, partial = "", phase = VoicePhase.Idle))
+        onMicTapped()
+    }
+
+    fun onVoiceStopRequested() {
+        val voice = _uiState.value.voice
+        patchVoice(
+            voice.copy(
+                phase = VoicePhase.Idle,
+                partial = "",
+                speaking = false,
+                statusLine = "Stopped"
+            )
+        )
+    }
+
+    fun onVoiceMuteToggle() {
+        val voice = _uiState.value.voice
+        patchVoice(voice.copy(muted = !voice.muted))
+    }
+
+    fun onTtsAvailability(available: Boolean) {
+        patchVoice(_uiState.value.voice.copy(ttsAvailable = available))
+    }
+
+    fun onTtsSpeaking(speaking: Boolean) {
+        patchVoice(_uiState.value.voice.copy(speaking = speaking))
+    }
+
+    fun onNeedMicPermission() {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.NeedPermission,
+                statusLine = "Microphone permission needed"
+            )
+        )
+    }
+
+    fun onMicPermissionDenied() {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.PermissionDenied,
+                statusLine = "Microphone permission denied — enable it in system settings"
+            )
+        )
+    }
+
+    fun onVoiceLoadingModel() {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.LoadingModel,
+                statusLine = "Loading on-device speech model…"
+            )
+        )
+    }
+
+    fun onVoiceListening() {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.Listening,
+                statusLine = "Listening…",
+                partial = ""
+            )
+        )
+    }
+
+    fun onVoicePartial(text: String) {
+        patchVoice(_uiState.value.voice.copy(partial = text, phase = VoicePhase.Listening))
+    }
+
+    fun onVoiceNoSpeech() {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.NoSpeech,
+                statusLine = "Didn't catch that — try again",
+                partial = ""
+            )
+        )
+    }
+
+    fun onVoiceHeard(text: String) {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.Thinking,
+                you = text,
+                partial = "",
+                statusLine = "Thinking…"
+            )
+        )
+    }
+
+    fun onVoiceAnswer(text: String) {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.Answered,
+                deck = text,
+                statusLine = "Answer ready"
+            )
+        )
+    }
+
+    fun onVoiceFailed(message: String) {
+        patchVoice(
+            _uiState.value.voice.copy(
+                phase = VoicePhase.Failed(message),
+                statusLine = message
+            )
+        )
+    }
+
+    private fun patchVoice(next: VoiceUiState) {
+        _uiState.update { it.copy(voice = next) }
+    }
+}
+
+fun repairHeadline(state: AppState): String {
+    val incidents = state.pipelines.incidents
+    if (incidents.isEmpty()) return "No active incidents"
+    val review = incidents.count { it.outcome == PipelineOutcome.AWAITING_REVIEW }
+    val running = incidents.count { it.outcome == PipelineOutcome.IN_PROGRESS }
+    val applied = incidents.count { it.outcome == PipelineOutcome.COMPLETE }
+    return when {
+        running > 0 && state.sandboxRunning -> "Repair in progress: sandbox verifying"
+        running > 0 -> "Repair in progress"
+        review == 1 -> "1 incident awaiting review"
+        review > 1 -> "$review incidents awaiting review"
+        applied > 0 -> "Last repair applied ($applied complete)"
+        else -> "${incidents.size} incident(s) in pipeline"
+    }
+}
+
+fun IncidentPipeline.matchesRepairFilter(filter: RepairFilter): Boolean = when (filter) {
+    RepairFilter.ALL -> true
+    RepairFilter.ACTIVE -> outcome == PipelineOutcome.IN_PROGRESS
+    RepairFilter.REVIEW -> outcome == PipelineOutcome.AWAITING_REVIEW
+    RepairFilter.APPLIED -> outcome == PipelineOutcome.COMPLETE
+    RepairFilter.FAILED -> outcome == PipelineOutcome.FAILED ||
+        outcome == PipelineOutcome.REJECTED ||
+        outcome == PipelineOutcome.ROLLED_BACK
 }

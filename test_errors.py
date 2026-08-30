@@ -1,5 +1,4 @@
 import sys
-import os
 
 def trigger_type_error():
     print("[Test] Triggering Python TypeError (Concatenation with None)...")
@@ -9,13 +8,12 @@ def trigger_type_error():
 def trigger_attribute_error():
     print("[Test] Triggering Python AttributeError (NoneType object)...")
     user = None
-    if user.is_authenticated():
-        print("Logged in")
+    print(user.is_authenticated())
 
 def trigger_key_error():
     print("[Test] Triggering Python KeyError...")
     config = {"port": 8080}
-    print(config.get("database_url", None))
+    print(config["database_url"])
 
 def trigger_zero_division():
     print("[Test] Triggering Python ZeroDivisionError...")

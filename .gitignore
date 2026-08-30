@@ -12,10 +12,8 @@ __pycache__/
 *.pyc
 *.bak
 *.tmp
-.devdeck/snapshots/
-.devdeck/sandbox/
-.devdeck/pairing_state.json
-*.devdeck-snapshot
+.devdeck/
 crash_log.txt
 .worktrees/
+app/src/main/assets/vosk/*.zip
 

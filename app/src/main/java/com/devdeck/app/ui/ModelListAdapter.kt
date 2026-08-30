@@ -21,6 +21,12 @@ class ModelListAdapter(
             binding.modelName.text = model.displayName
             binding.modelDescription.text = model.description
             binding.activeBadge.isVisible = model.isActive
+            binding.recommendationLabel.isVisible = !model.recommendation.isNullOrBlank()
+            binding.recommendationLabel.text = model.recommendation ?: ""
+            binding.availabilityLabel.text = when {
+                model.isAvailable -> "On this phone"
+                else -> "Not installed — adb push required"
+            }
 
             // Tier badge
             binding.tierBadge.text = model.tier.name

@@ -15,18 +15,8 @@ class ModelManager(private val context: Context) {
         val qwenPath = resolveModelLocation("qwen2.5-coder-1.5b-gpu.bin")
         val phiPath = resolveModelLocation("phi-3.5-mini-gpu.bin")
 
+        val known = listOf(gemmaPath, qwenPath, phiPath)
         return listOf(
-            ModelConfig(
-                id = "gemma-2b",
-                displayName = "Gemma 2B IT",
-                description = "Lightweight general-purpose model optimized for mobile",
-                filePath = gemmaPath,
-                sizeGB = 1.3f,
-                estimatedTPS = 18f,
-                specialty = "General debugging",
-                tier = ModelTier.FAST,
-                isActive = currentPath == gemmaPath
-            ),
             ModelConfig(
                 id = "qwen-coder",
                 displayName = "Qwen2.5 Coder 1.5B",
@@ -36,7 +26,22 @@ class ModelManager(private val context: Context) {
                 estimatedTPS = 24f,
                 specialty = "Code repair specialist",
                 tier = ModelTier.FAST,
-                isActive = currentPath == qwenPath
+                isActive = currentPath == qwenPath,
+                isAvailable = isModelAvailable(qwenPath),
+                recommendation = "Recommended for DevDeck repairs"
+            ),
+            ModelConfig(
+                id = "gemma-2b",
+                displayName = "Gemma 2B IT",
+                description = "Lightweight general-purpose model optimized for mobile",
+                filePath = gemmaPath,
+                sizeGB = 1.3f,
+                estimatedTPS = 18f,
+                specialty = "General debugging",
+                tier = ModelTier.FAST,
+                isActive = currentPath == gemmaPath,
+                isAvailable = isModelAvailable(gemmaPath),
+                recommendation = "Good default if this file is already on the phone"
             ),
             ModelConfig(
                 id = "phi-3.5",
@@ -47,20 +52,39 @@ class ModelManager(private val context: Context) {
                 estimatedTPS = 11f,
                 specialty = "Complex logic bugs",
                 tier = ModelTier.ADVANCED,
-                isActive = currentPath == phiPath
+                isActive = currentPath == phiPath,
+                isAvailable = isModelAvailable(phiPath),
+                recommendation = "Optional — slower, better on harder bugs"
             ),
             ModelConfig(
                 id = "custom",
-                displayName = "Custom Model",
-                description = "User-provided model path",
+                displayName = ModelDisplayNames.fromPath(currentPath),
+                description = "Any MediaPipe-compatible .bin you push to the device",
                 filePath = currentPath,
                 sizeGB = 0f,
                 estimatedTPS = 0f,
-                specialty = "Unknown",
+                specialty = "Your file",
                 tier = ModelTier.FAST,
-                isActive = !listOf(gemmaPath, qwenPath, phiPath).contains(currentPath)
+                isActive = currentPath.isNotBlank() && currentPath !in known,
+                isAvailable = isModelAvailable(currentPath),
+                recommendation = if (currentPath !in known) "Currently selected file" else null
             )
         )
+    }
+
+    fun getActiveDisplayName(): String {
+        val path = getCurrentModelPath()
+        val configured = prefs.getString("model_path", null)
+        val stored = prefs.getString("model_display_name", null)
+        if (!stored.isNullOrBlank() && configured == path) return stored
+        return ModelDisplayNames.fromPath(path)
+    }
+
+    fun setModelPath(path: String, displayName: String? = null) {
+        prefs.edit()
+            .putString("model_path", path)
+            .putString("model_display_name", displayName ?: ModelDisplayNames.fromPath(path))
+            .apply()
     }
 
     private fun resolveModelLocation(fileName: String): String {
@@ -79,30 +103,21 @@ class ModelManager(private val context: Context) {
         return resolveModelLocation("gemma-2b-it-gpu.bin")
     }
 
-    fun setModelPath(path: String) {
-        prefs.edit().putString("model_path", path).apply()
-    }
-
     fun isModelAvailable(path: String): Boolean {
         return java.io.File(path).exists()
     }
 
     suspend fun verifyModel(path: String): Triple<Boolean, Float, String?> = withContext(Dispatchers.IO) {
         val originalPath = getCurrentModelPath()
+        val originalName = getActiveDisplayName()
         return@withContext try {
-            // Temporarily switch to test model
             setModelPath(path)
-
-            // Create agent and initialize
             val agent = DiagnosticAgent(context)
             agent.initModel()
-
             if (!agent.isEngineReady()) {
-                setModelPath(originalPath)
+                setModelPath(originalPath, originalName)
                 return@withContext Triple(false, 0f, "Model initialization failed")
             }
-
-            // Run canary test
             val (result, duration) = agent.analyzeError(
                 errorText = "Test: NameError: name 'x' is not defined",
                 sourceContext = "y = x + 1",
@@ -110,16 +125,13 @@ class ModelManager(private val context: Context) {
                 lineNum = 1,
                 originalLine = "y = x + 1"
             )
-
             val tps = result.tokensPerSecond
-
-            // Restore original path
-            setModelPath(originalPath)
+            setModelPath(originalPath, originalName)
 
             Triple(true, tps, null)
         } catch (e: Exception) {
             // Restore original path on error
-            setModelPath(originalPath)
+            setModelPath(originalPath, originalName)
             Triple(false, 0f, e.message)
         }
     }

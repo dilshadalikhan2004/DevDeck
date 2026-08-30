@@ -35,6 +35,8 @@ class RelayService : Service() {
     private val binder = LocalBinder()
 
     private val listeners = mutableSetOf<RelayListener>()
+    private val unboundQueue = ArrayDeque<String>()
+    private val queueLock = Any()
 
     interface RelayListener {
         fun onConnectionStateChanged(connected: Boolean)
@@ -49,6 +51,7 @@ class RelayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        loadUnboundQueue()
         createNotificationChannel()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -69,6 +72,13 @@ class RelayService : Service() {
     fun addListener(listener: RelayListener) {
         listeners.add(listener)
         listener.onConnectionStateChanged(isConnected.get())
+        val queued = synchronized(queueLock) {
+            val copy = unboundQueue.toList()
+            unboundQueue.clear()
+            persistUnboundQueue()
+            copy
+        }
+        queued.forEach { listener.onMessageReceived(it) }
     }
 
     fun removeListener(listener: RelayListener) {
@@ -184,7 +194,20 @@ class RelayService : Service() {
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                notifyListeners { it.onMessageReceived(text) }
+                maybeNotifyIncident(text)
+                val deliverNow = synchronized(queueLock) {
+                    if (listeners.isEmpty()) {
+                        unboundQueue.addLast(text)
+                        while (unboundQueue.size > MAX_QUEUED) unboundQueue.removeFirst()
+                        persistUnboundQueue()
+                        false
+                    } else {
+                        true
+                    }
+                }
+                if (deliverNow) {
+                    notifyListeners { it.onMessageReceived(text) }
+                }
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -251,6 +274,62 @@ class RelayService : Service() {
         notificationManager.notify(NOTIFICATION_ID, createNotification(content))
     }
 
+    private fun maybeNotifyIncident(text: String) {
+        try {
+            val json = JSONObject(text)
+            val type = json.optString("type")
+            val isIncident = type == "incident" || (json.has("error_text") && json.has("command") && type.isBlank())
+            if (!isIncident) return
+            val file = json.optString("error_file", "unknown")
+            val line = json.optString("error_line", "")
+            val incidentId = json.optString("incident_id")
+            val summary = json.optString("error_text").lineSequence().firstOrNull { it.isNotBlank() } ?: "Incident captured"
+            postIncidentNotification(
+                "$file:$line",
+                "Tap to diagnose. Approve on Repair is still required before live files change.",
+                incidentId
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun postIncidentNotification(title: String, body: String, incidentId: String = "") {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+        }
+        val launch = Intent(this, com.devdeck.app.ui.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_REPAIR, true)
+            if (incidentId.isNotBlank()) putExtra(EXTRA_INCIDENT_ID, incidentId)
+        }
+        val pending = PendingIntent.getActivity(
+            this,
+            2,
+            launch,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, INCIDENT_CHANNEL_ID)
+            .setContentTitle("DevDeck · $title")
+            .setContentText(body)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .setContentIntent(pending)
+            .setFullScreenIntent(pending, false)
+            .build()
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(INCIDENT_NOTIFICATION_ID, notification)
+        try {
+            startActivity(launch)
+        } catch (_: Exception) {
+        }
+    }
+
     private fun createNotification(content: String): Notification {
         val intent = Intent(this, com.devdeck.app.ui.MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
@@ -272,8 +351,40 @@ class RelayService : Service() {
                 "DevDeck Connection",
                 NotificationManager.IMPORTANCE_LOW
             )
+            val incidentChannel = NotificationChannel(
+                INCIDENT_CHANNEL_ID,
+                "DevDeck Incidents",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Opens Repair when the laptop captures a crash"
+                enableVibration(true)
+            }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(incidentChannel)
+        }
+    }
+
+    private fun queuePrefs() = getSharedPreferences("devdeck_relay_queue", MODE_PRIVATE)
+
+    private fun persistUnboundQueue() {
+        val arr = org.json.JSONArray()
+        unboundQueue.forEach { arr.put(it) }
+        queuePrefs().edit().putString(QUEUE_PREF, arr.toString()).apply()
+    }
+
+    private fun loadUnboundQueue() {
+        val raw = queuePrefs().getString(QUEUE_PREF, null) ?: return
+        try {
+            val arr = org.json.JSONArray(raw)
+            synchronized(queueLock) {
+                unboundQueue.clear()
+                for (i in 0 until arr.length()) {
+                    val item = arr.optString(i)
+                    if (item.isNotBlank()) unboundQueue.addLast(item)
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -288,6 +399,12 @@ class RelayService : Service() {
     companion object {
         private const val TAG = "RelayService"
         private const val CHANNEL_ID = "relay_connection"
+        private const val INCIDENT_CHANNEL_ID = "relay_incidents"
         private const val NOTIFICATION_ID = 1
+        private const val INCIDENT_NOTIFICATION_ID = 2
+        const val EXTRA_OPEN_REPAIR = "open_repair"
+        const val EXTRA_INCIDENT_ID = "incident_id"
+        private const val QUEUE_PREF = "unbound_ws"
+        private const val MAX_QUEUED = 8
     }
 }

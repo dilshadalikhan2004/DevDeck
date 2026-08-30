@@ -143,9 +143,6 @@ fun PipelineIncidentCard(
                     onClick = { onSelectStage(snap.stage) }
                 )
             }
-            pipeline.failureSummary?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFBA1A1A), fontSize = 12.sp)
-            }
         }
     }
 }
@@ -218,7 +215,7 @@ fun PipelineNodeRow(snapshot: StageSnapshot, expanded: Boolean, onClick: () -> U
                     fontWeight = if (snapshot.status == NodeStatus.ACTIVE) FontWeight.Bold else FontWeight.Medium,
                     color = if (snapshot.status == NodeStatus.PENDING) Color(0xFF9E9E9E) else MaterialTheme.colorScheme.onSurface
                 )
-                if (snapshot.summary.isNotBlank()) {
+                if (snapshot.summary.isNotBlank() && snapshot.status != NodeStatus.PENDING) {
                     Text(snapshot.summary, style = MaterialTheme.typography.labelSmall, color = color, fontSize = 10.sp)
                 }
             }

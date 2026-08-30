@@ -5,17 +5,21 @@ import android.util.Log
 import com.devdeck.app.model.DiagnosticResult
 import com.devdeck.app.model.PatchType
 import com.devdeck.app.model.ProjectContextManager
+import com.devdeck.app.voice.IncidentVoicePack
+import com.devdeck.app.voice.VoicePromptBuilder
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.system.measureTimeMillis
 
 class DiagnosticAgent(private val context: Context?) {
 
     private var llmInference: LlmInference? = null
     private var isInitializing = false
+    private val inferenceMutex = Mutex()
     private val projectContextManager = context?.let { ProjectContextManager(it) }
     
     // Stored in preferences with automatic discovery across app directories and /data/local/tmp
@@ -107,14 +111,19 @@ class DiagnosticAgent(private val context: Context?) {
         } else {
             errorText
         }
+        val recovered = IncidentSource.recover(constrainedTrace, sourceContext, originalLine, lineNum)
+        val orig = recovered.first
+        val line = recovered.second ?: lineNum
         if (inference == null) {
             Log.w("DevDeck", "LlmInference null, falling back to heuristic. isInitializing=$isInitializing")
-            val result = HeuristicDiagnosticEngine.diagnose(constrainedTrace, sourceContext, filePath, lineNum, originalLine)
+            val result = HeuristicDiagnosticEngine.diagnose(constrainedTrace, sourceContext, filePath, line, orig)
             return@withContext result.copy(
                 expectedSha256 = expectedSha256, 
                 incidentId = incidentId,
                 projectId = projectId,
-                confidence = 1.0f
+                confidence = 1.0f,
+                originalLine = orig ?: result.originalLine,
+                repairLine = result.repairLine ?: line
             ) to 0L
         }
         
@@ -128,7 +137,7 @@ class DiagnosticAgent(private val context: Context?) {
             "\nRETRIEVED REPOSITORY EVIDENCE:\n$truncated\n"
         } else ""
 
-        val originalIds = originalLine?.let { extractIdentifiers(it) }?.joinToString(", ") ?: "None"
+        val originalIds = orig?.let { extractIdentifiers(it) }?.joinToString(", ") ?: "None"
         val ruleContext = projectContextManager?.getFormattedContext() ?: ""
 
         // High-accuracy few-shot prompt optimized for small on-device SLMs (Gemma-2B)
@@ -186,7 +195,7 @@ class DiagnosticAgent(private val context: Context?) {
             $safeSourceContext
             $safeRepoContext
             Target Code Context:
-            $originalLine
+            $orig
             ${if (!developerConstraint.isNullOrBlank()) "DEVELOPER CORRECTION (must honor):\n$developerConstraint\n" else ""}
             <end_of_turn>
             <start_of_turn>model
@@ -195,20 +204,23 @@ class DiagnosticAgent(private val context: Context?) {
         var response = ""
         val runtime = Runtime.getRuntime()
         val startMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
-
-        val duration = measureTimeMillis {
-            try {
-                response = inference.generateResponse(prompt)
-            } catch (t: Throwable) {
-                Log.e("DevDeck", "generateResponse failed (${t.javaClass.simpleName}): ${t.message}")
-                val fallback = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
-                return@withContext fallback.copy(
-                    expectedSha256 = expectedSha256, 
-                    incidentId = incidentId, 
-                    projectId = projectId,
-                    confidence = 1.0f
-                ) to 0L
+        val inferStart = System.currentTimeMillis()
+        val duration = try {
+            response = inferenceMutex.withLock {
+                inference.generateResponse(prompt)
             }
+            System.currentTimeMillis() - inferStart
+        } catch (t: Throwable) {
+            Log.e("DevDeck", "generateResponse failed (${t.javaClass.simpleName}): ${t.message}")
+            val fallback = HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, line, orig)
+            return@withContext fallback.copy(
+                expectedSha256 = expectedSha256,
+                incidentId = incidentId,
+                projectId = projectId,
+                confidence = 1.0f,
+                originalLine = orig ?: fallback.originalLine,
+                repairLine = fallback.repairLine ?: line
+            ) to 0L
         }
 
         val endMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
@@ -218,15 +230,17 @@ class DiagnosticAgent(private val context: Context?) {
         val tps = if (duration > 0) (tokenCount / (duration / 1000f)) else 0f
 
         val result = try {
-            parseResponse(response, tps, memUsage, filePath, lineNum, originalLine, errorText, sourceContext, repositorySymbols)
+            parseResponse(response, tps, memUsage, filePath, line, orig, errorText, sourceContext, repositorySymbols)
         } catch (t: Throwable) {
             Log.e("DevDeck", "parseResponse threw error: ${t.message}")
-            HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, lineNum, originalLine)
+            HeuristicDiagnosticEngine.diagnose(errorText, sourceContext, filePath, line, orig)
         }
         val finalResult = result.copy(
             expectedSha256 = expectedSha256, 
             incidentId = incidentId, 
-            projectId = projectId
+            projectId = projectId,
+            originalLine = result.originalLine ?: orig,
+            repairLine = result.repairLine ?: line
         )
         return@withContext finalResult to duration
     }
@@ -340,20 +354,28 @@ class DiagnosticAgent(private val context: Context?) {
             val fixRegex = "<<<FIX>>>([\\s\\S]*?)(?:<<<END>>>|<end_of_turn>|$)".toRegex()
             val match = fixRegex.find(raw)
             var extractedFix = match?.groupValues?.get(1)?.trim()
-
             if (extractedFix != null && extractedFix.uppercase() == "UNKNOWN") {
+                Log.w("DevDeck", "Model returned UNKNOWN (NEEDS_CONTEXT). Abstaining from repair.")
+                val causeText = if (reasoning != null && reasoning.contains("NEEDS_CONTEXT")) {
+                    reasoning
+                } else if (reasoning != null) {
+                    "NEEDS_CONTEXT: $reasoning"
+                } else {
+                    "NEEDS_CONTEXT: Insufficient context to generate a confident patch."
+                }
                 return DiagnosticResult(
-                    rootCause = "NEEDS_CONTEXT: not enough evidence for a safe fix.",
+                    rootCause = causeText,
                     location = filePath ?: "Unclear",
-                    fix = "No safe fix proposed",
-                    isParsed = false,
+                    fix = "Cannot synthesize fix without additional repository context.",
                     tokensPerSecond = tps,
                     memoryUsageMB = mem,
                     repairFile = filePath,
                     repairLine = lineNum,
+                    repairCode = null,
                     originalLine = originalLine,
+                    patchType = PatchType.SINGLE_LINE,
                     rawOutput = raw,
-                    reasoning = reasoning ?: "The model abstained rather than guessing.",
+                    reasoning = reasoning,
                     abstained = true
                 )
             }
@@ -366,10 +388,11 @@ class DiagnosticAgent(private val context: Context?) {
                 ?.lines()?.firstOrNull { it.isNotBlank() }?.trim()
 
             // Semantic Grounding Check
+            val origMissing = originalLine.isNullOrBlank() || originalLine.equals("null", ignoreCase = true)
             val originalIds = (originalLine?.let { extractIdentifiers(it) } ?: emptySet()) + repositorySymbols
             val fixIds = extractedFix?.let { extractIdentifiers(it) } ?: emptySet()
             val hallucinatedIds = (fixIds - originalIds)
-            val hasNewIdentifiers = originalLine != null && extractedFix != null && hallucinatedIds.isNotEmpty()
+            val hasNewIdentifiers = !origMissing && extractedFix != null && hallucinatedIds.isNotEmpty()
 
             val isSingleLine = extractedFix != null && !extractedFix.contains("\n") && !extractedFix.contains("\r")
             val isNotUnknown = extractedFix != null && extractedFix.uppercase() != "UNKNOWN" && extractedFix.isNotBlank()
@@ -432,6 +455,39 @@ class DiagnosticAgent(private val context: Context?) {
             abstained = heuristicResult.abstained || heuristicResult.repairCode.isNullOrBlank()
         )
     }
+
+    /**
+     * Spoken Q&A against the loaded Gemma engine. Does not run the repair prompt or heuristic fixer.
+     */
+    suspend fun answerIncidentQuestion(question: String, pack: IncidentVoicePack): Result<String> =
+        withContext(Dispatchers.IO) {
+            var waitCount = 0
+            while (isInitializing && llmInference == null && waitCount < 60) {
+                delay(500)
+                waitCount++
+            }
+            val inference = llmInference
+                ?: return@withContext Result.failure(
+                    IllegalStateException("On-device model is not ready. Open Model Manager and wait for Gemma to load.")
+                )
+            val prompt = VoicePromptBuilder.build(question, pack)
+            try {
+                val raw = inferenceMutex.withLock {
+                    inference.generateResponse(prompt)
+                }
+                val spoken = VoicePromptBuilder.sanitizeSpokenAnswer(raw)
+                if (spoken.isBlank()) {
+                    Result.failure(IllegalStateException("The on-device model returned an empty answer."))
+                } else {
+                    Result.success(spoken)
+                }
+            } catch (t: Throwable) {
+                Log.e("DevDeck", "Voice Q&A generateResponse failed: ${t.message}")
+                Result.failure(
+                    IllegalStateException(t.message ?: "On-device inference failed for this question.")
+                )
+            }
+        }
 }
 
 /** Deterministic offline safety net: generates precise, guaranteed-working repairs for known error patterns */
@@ -446,24 +502,26 @@ internal object HeuristicDiagnosticEngine {
         val locationMatch = Regex("(?:File \\\"([^\\\"]+)\\\", line (\\d+)|([\\w./-]+\\.(?:kt|java|py|js|ts|tsx|cpp|c)):(\\d+))")
             .find(trace)
         
-        val filePath = fPath ?: locationMatch?.groupValues?.get(1) ?: locationMatch?.groupValues?.get(3)
-        val lineNum = lNum ?: locationMatch?.groupValues?.get(2)?.toIntOrNull() ?: locationMatch?.groupValues?.get(4)?.toIntOrNull()
+        val recovered = IncidentSource.recover(trace, source, origLine, lNum)
+        val filePath = fPath ?: locationMatch?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+            ?: locationMatch?.groupValues?.get(3)?.takeIf { it.isNotBlank() }
+        val lineNum = recovered.second ?: locationMatch?.groupValues?.get(2)?.toIntOrNull()
+            ?: locationMatch?.groupValues?.get(4)?.toIntOrNull()
         val location = if (filePath != null && lineNum != null) "$filePath:$lineNum" else "Location unclear"
 
         val normalized = trace.lowercase()
-        val cleanOrig = origLine?.trim()
+        val cleanOrig = recovered.first?.trim()
 
         var cause = "Unexpected exception in execution."
         var fix = "Inspect stack trace and correct the failing statement."
         var repairCode: String? = null
 
         when {
-            // TypeError: concatenate NoneType / int to str
-            "typeerror" in normalized && ("concatenate" in normalized || "must be str" in normalized || "not str" in normalized) -> {
-                cause = "Type mismatch: attempting to concatenate a non-string value with a string."
-                fix = "Wrap the variable in str() to ensure safe string conversion."
+            // TypeError: concatenate NoneType / int to str, or any TypeError with + on the line
+            "typeerror" in normalized -> {
+                cause = "Type mismatch at runtime."
+                fix = "Coerce the value with str() or guard None before concatenating."
                 if (cleanOrig != null) {
-                    // Match pattern: "..." + var or '...' + var or var + "..."
                     repairCode = cleanOrig.replace(Regex("""\+\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\()""")) { match ->
                         val varName = match.groupValues[1]
                         if (varName in setOf("str", "int", "float", "len")) match.value else "+ str($varName)"
@@ -563,14 +621,49 @@ internal object HeuristicDiagnosticEngine {
                 }
             }
 
+            // NameError
+            "nameerror" in normalized -> {
+                val missing = Regex("""name ['\"](\w+)['\"] is not defined""").find(trace)?.groupValues?.get(1)
+                cause = if (missing != null) "NameError: '$missing' is not defined." else "NameError: undefined name."
+                fix = "Initialize the missing name or correct the identifier."
+                if (cleanOrig != null && missing != null && missing in cleanOrig) {
+                    repairCode = "$missing = None; $cleanOrig"
+                }
+            }
+
+            // AssertionError — keep expected side of a simple equality if we can see both values
+            "assertionerror" in normalized -> {
+                cause = "Assertion failed."
+                fix = "Align the assertion with the actual result, or fix the function under test."
+                val eq = Regex("""assert\s+(.+?)\s*==\s*(.+)""").find(cleanOrig ?: "")
+                if (eq != null) {
+                    repairCode = null
+                }
+            }
+
             else -> {
                 if ("modulenotfounderror" in normalized || "failed to import test module" in normalized) {
                     cause = "Unittest loaded a file path as a package (e.g. tests.unit) instead of discovering the test module."
                     fix = "Run with unittest discover, or add empty __init__.py files under tests/. No single-line source patch is safe here."
                     repairCode = null
+                } else if (cleanOrig != null && (" + " in cleanOrig || ".get(" !in cleanOrig && "[" in cleanOrig)) {
+                    cause = "Runtime failure on this source line."
+                    fix = "Guard the failing expression."
+                    if (" + " in cleanOrig) {
+                        repairCode = cleanOrig.replace(Regex("""\+\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\()""")) { "+ str(${it.groupValues[1]})" }
+                    }
+                    if (repairCode == null || repairCode == cleanOrig) {
+                        val sub = Regex("""([a-zA-Z_][a-zA-Z0-9_]*)\[([^\]]+)\]""").find(cleanOrig)
+                        if (sub != null) {
+                            repairCode = cleanOrig.replace(
+                                sub.value,
+                                "${sub.groupValues[1]}.get(${sub.groupValues[2]}, None)"
+                            )
+                        }
+                    }
                 } else {
-                    cause = "Command failed at deepest stack frame."
-                    fix = "Review syntax and runtime bindings."
+                    cause = "No matching repair pattern for this exception."
+                    fix = "Could not synthesize a patch from this stack trace."
                 }
             }
         }

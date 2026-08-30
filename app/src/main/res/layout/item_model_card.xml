@@ -46,6 +46,26 @@
                 android:visibility="gone" />
         </LinearLayout>
 
+        <TextView
+            android:id="@+id/recommendationLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Recommended"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textColor="#0059b5"
+            android:layout_marginTop="8dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/availabilityLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="On this phone"
+            android:textSize="12sp"
+            android:textColor="#666666"
+            android:layout_marginTop="4dp" />
+
         <!-- Description -->
         <TextView
             android:id="@+id/modelDescription"

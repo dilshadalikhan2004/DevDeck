@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -43,7 +45,29 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
+
+val voskModelZip = file("src/main/assets/vosk/vosk-model-small-en-us-0.15.zip")
+tasks.register("downloadVoskModel") {
+    outputs.file(voskModelZip)
+    doLast {
+        if (voskModelZip.exists() && voskModelZip.length() > 1_000_000) return@doLast
+        voskModelZip.parentFile.mkdirs()
+        val url = URI("https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip").toURL()
+        url.openStream().use { input ->
+            voskModelZip.outputStream().use { output -> input.copyTo(output) }
+        }
+        if (!voskModelZip.exists() || voskModelZip.length() < 1_000_000) {
+            throw GradleException("Vosk model download failed or file is too small: $voskModelZip")
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn("downloadVoskModel") }
 
 dependencies {
     // Core
@@ -72,6 +96,9 @@ dependencies {
 
     // MediaPipe LLM Inference (The core of DevDeck)
     implementation("com.google.mediapipe:tasks-genai:0.10.35")
+
+    // Offline speech-to-text (no network in the recognition path)
+    implementation("com.alphacephei:vosk-android:0.3.47")
 
     // JSON Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")

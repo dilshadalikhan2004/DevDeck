@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
@@ -30,6 +31,8 @@ import androidx.compose.ui.unit.sp
 import com.devdeck.app.model.HistoryItem
 import com.devdeck.app.model.IncidentStatus
 import com.devdeck.app.ui.AppState
+import com.devdeck.app.ui.BrainEdge
+import com.devdeck.app.ui.HistoryStatusFilter
 import com.devdeck.app.ui.theme.LuminaDesign
 import java.text.SimpleDateFormat
 import java.util.*
@@ -144,6 +147,20 @@ fun BrainScreen(state: AppState) {
                             DependencyRow(type, symbol, status)
                         }
                     }
+                    if (brain.edges.isNotEmpty()) {
+                        HorizontalDivider(color = LuminaDesign.HairlineStroke)
+                        Text(
+                            "IMPORT EDGES (from laptop index)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        brain.edges.take(40).forEach { edge ->
+                            HorizontalDivider(color = LuminaDesign.HairlineStroke)
+                            DependencyRow(edge.kind, "${edge.src} → ${edge.dst}", "Linked")
+                        }
+                    }
                 }
             }
         }
@@ -172,6 +189,7 @@ fun DependencyRow(type: String, symbol: String, status: String) {
         "In play" -> Color(0xFF006e28)
         "Evidence" -> Color(0xFFE65100)
         "From crash" -> Color(0xFFE65100)
+        "Linked" -> Color(0xFF0059b5)
         else -> Color(0xFF616161)
     }
     Row(
@@ -204,10 +222,18 @@ fun DependencyRow(type: String, symbol: String, status: String) {
 @Composable
 fun HistoryScreen(historyItems: List<HistoryItem>) {
     var searchQuery by remember { mutableStateOf("") }
+    var statusFilter by remember { mutableStateOf(HistoryStatusFilter.ALL) }
 
-    val filtered = remember(searchQuery, historyItems) {
-        if (searchQuery.isBlank()) historyItems
-        else historyItems.filter { it.matchesHistoryQuery(searchQuery) }
+    val filtered = remember(searchQuery, historyItems, statusFilter) {
+        historyItems.filter { item ->
+            val statusOk = when (statusFilter) {
+                HistoryStatusFilter.ALL -> true
+                HistoryStatusFilter.DIAGNOSED -> item.status == IncidentStatus.DIAGNOSED || item.status == IncidentStatus.DETECTED
+                HistoryStatusFilter.FIXED -> item.status == IncidentStatus.SOLVED || item.status == IncidentStatus.REPAIR_SENT
+                HistoryStatusFilter.FAILED -> item.status == IncidentStatus.FAILED || item.status == IncidentStatus.SUPERSEDED
+            }
+            statusOk && (searchQuery.isBlank() || item.matchesHistoryQuery(searchQuery))
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -249,8 +275,16 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
                     modifier = Modifier
                         .size(50.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White)
-                        .border(1.dp, LuminaDesign.HairlineStroke, RoundedCornerShape(10.dp)),
+                        .background(if (statusFilter != HistoryStatusFilter.ALL) Color(0xFFE3F2FD) else Color.White)
+                        .border(1.dp, LuminaDesign.HairlineStroke, RoundedCornerShape(10.dp))
+                        .clickable {
+                            statusFilter = when (statusFilter) {
+                                HistoryStatusFilter.ALL -> HistoryStatusFilter.DIAGNOSED
+                                HistoryStatusFilter.DIAGNOSED -> HistoryStatusFilter.FIXED
+                                HistoryStatusFilter.FIXED -> HistoryStatusFilter.FAILED
+                                HistoryStatusFilter.FAILED -> HistoryStatusFilter.ALL
+                            }
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.FilterList, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
@@ -258,7 +292,7 @@ fun HistoryScreen(historyItems: List<HistoryItem>) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Search filename, exception (KeyError), status (FIXED / DIAGNOSED), patch text, or incident id.",
+                "Search filename, exception (KeyError), status (FIXED / DIAGNOSED), patch text, or incident id. Filter: ${statusFilter.name}.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp
@@ -426,7 +460,8 @@ fun HistoryCard(item: HistoryItem) {
 fun SettingsScreen(
     state: AppState,
     onRepairPermissionChange: (Boolean) -> Unit,
-    onPairDevice: () -> Unit
+    onPairDevice: () -> Unit,
+    onOpenModels: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -520,35 +555,56 @@ fun SettingsScreen(
                         }
                     }
                     HorizontalDivider(color = LuminaDesign.HairlineStroke)
-                    // Model Status
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenModels() }
+                            .padding(horizontal = 20.dp, vertical = 18.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            Icon(Icons.Default.Memory, null, modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Model Status", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, fontSize = 15.sp)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .border(1.dp, Color(0xFF006e28), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Box(modifier = Modifier.size(6.dp).background(
-                                    if (state.isModelReady) Color(0xFF006e28) else Color(0xFFE65100),
-                                    CircleShape
-                                ))
+                            Icon(Icons.Default.Memory, null, modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column {
+                                Text("On-device model", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, fontSize = 15.sp)
                                 Text(
-                                    if (state.isModelReady) "Ready" else "Loading",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (state.isModelReady) Color(0xFF006e28) else Color(0xFFE65100),
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 11.sp
+                                    "${state.modelDisplayName} · tap for recommended models",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 12.sp
                                 )
                             }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color(0xFF006e28), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(modifier = Modifier.size(6.dp).background(
+                                        if (state.isModelReady) Color(0xFF006e28) else Color(0xFFE65100),
+                                        CircleShape
+                                    ))
+                                    Text(
+                                        if (state.isModelReady) "Ready" else "Loading",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (state.isModelReady) Color(0xFF006e28) else Color(0xFFE65100),
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Open model list",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }

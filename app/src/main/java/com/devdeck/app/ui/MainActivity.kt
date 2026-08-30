@@ -1,10 +1,12 @@
 package com.devdeck.app.ui
 
+import android.Manifest
 import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -14,6 +16,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -27,8 +30,18 @@ import com.devdeck.app.pipeline.PipelineStage
 import com.devdeck.app.service.RelayService
 import com.devdeck.app.ui.components.MainScaffold
 import com.devdeck.app.ui.theme.LuminaTheme
+import com.devdeck.app.voice.IncidentVoicePack
+import com.devdeck.app.voice.OnDeviceTts
+import com.devdeck.app.voice.SessionCallbacks
+import com.devdeck.app.voice.VoiceCommand
+import com.devdeck.app.voice.VoiceCommandParser
+import com.devdeck.app.voice.VoskSpeechSession
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
@@ -38,6 +51,21 @@ class MainActivity : ComponentActivity() {
     private var relayService: RelayService? = null
     private val history by lazy { DiagnosticHistory(this) }
     private val pendingIncidents = mutableMapOf<String, JSONObject>()
+    private val diagnosisStarted = mutableSetOf<String>()
+    private var openFromIncident = false
+    private val modelManager by lazy { com.devdeck.app.model.ModelManager(this) }
+    private var voskSession: VoskSpeechSession? = null
+    private var deviceTts: OnDeviceTts? = null
+
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            beginVoiceListen()
+        } else {
+            viewModel.onMicPermissionDenied()
+        }
+    }
 
     private val securePrefs by lazy {
         val masterKey = MasterKey.Builder(this)
@@ -120,16 +148,68 @@ class MainActivity : ComponentActivity() {
                 MainScaffold(
                     viewModel = viewModel,
                     onLaunchScanner = { launchCameraScanner() },
-                    onManualConnect = { url, secret -> applyManualPairing(url, secret) }
+                    onManualConnect = { url, secret -> applyManualPairing(url, secret) },
+                    onVoiceStop = {
+                        voskSession?.cancel()
+                        deviceTts?.stop()
+                        viewModel.onVoiceStopRequested()
+                    },
+                    onVoiceMute = {
+                        val muteNext = !viewModel.uiState.value.voice.muted
+                        viewModel.onVoiceMuteToggle()
+                        if (muteNext) deviceTts?.stop()
+                    },
+                    onOpenModels = {
+                        startActivity(Intent(this, ModelSettingsActivity::class.java))
+                    }
                 )
             }
         }
 
+        refreshModelLabel()
+        handleOpenRepairIntent(intent)
         initAgent()
-        startRelayService()
+        initOnDeviceTts()
         observeViewModel()
         startTelemetryPolling()
         refreshHistory()
+        requestNotificationPermission()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOpenRepairIntent(intent)
+    }
+
+    private fun handleOpenRepairIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(RelayService.EXTRA_OPEN_REPAIR, false) != true) return
+        openFromIncident = true
+        viewModel.setScreen(AppScreen.REPAIR)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshModelLabel()
+    }
+
+    private fun refreshModelLabel() {
+        val name = modelManager.getActiveDisplayName()
+        viewModel.setModelDisplayName(name)
+    }
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* incident heads-up needs this; denial still leaves the in-app pipeline working */ }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
 
     // ── QR & Pairing Logic ───────────────────────────────────────────────────
@@ -226,6 +306,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        lifecycleScope.launch {
+            viewModel.voiceListenNonce.collect { nonce ->
+                if (nonce == 0L) return@collect
+                when {
+                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) ==
+                        PackageManager.PERMISSION_GRANTED -> beginVoiceListen()
+                    else -> {
+                        viewModel.onNeedMicPermission()
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+            }
+        }
     }
 
     // ── System Telemetry Polling ──────────────────────────────────────────────
@@ -309,24 +403,178 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ── Agent ─────────────────────────────────────────────────────────────────
+    private fun initOnDeviceTts() {
+        deviceTts = OnDeviceTts(
+            this,
+            onReadyChanged = { available -> runOnUiThread { viewModel.onTtsAvailability(available) } },
+            onSpeakingChanged = { speaking -> runOnUiThread { viewModel.onTtsSpeaking(speaking) } }
+        )
+    }
+
+    private fun beginVoiceListen() {
+        viewModel.onVoiceLoadingModel()
+        lifecycleScope.launch {
+            val session = voskSession ?: VoskSpeechSession(this@MainActivity).also { voskSession = it }
+            val prepared = withContext(Dispatchers.IO) { session.prepare() }
+            if (prepared.isFailure) {
+                viewModel.onVoiceFailed(
+                    prepared.exceptionOrNull()?.message
+                        ?: "Voice model failed to load. The app did not crash; speech is unavailable."
+                )
+                return@launch
+            }
+            viewModel.onVoiceListening()
+            session.start(object : SessionCallbacks {
+                override fun onPartial(text: String) {
+                    viewModel.onVoicePartial(text)
+                }
+
+                override fun onFinished(text: String) {
+                    answerSpokenQuestion(text)
+                }
+
+                override fun onNoSpeech() {
+                    viewModel.onVoiceNoSpeech()
+                }
+
+                override fun onFailed(message: String) {
+                    viewModel.onVoiceFailed(message)
+                }
+            })
+        }
+    }
+
+    private fun answerSpokenQuestion(transcript: String) {
+        viewModel.onVoiceHeard(transcript)
+        when (VoiceCommandParser.parse(transcript)) {
+            VoiceCommand.APPROVE -> {
+                speakVoiceReply(viewModel.voiceApproveMessage())
+                return
+            }
+            VoiceCommand.REJECT, VoiceCommand.ROLLBACK -> {
+                speakVoiceReply(viewModel.voiceRejectMessage())
+                return
+            }
+            VoiceCommand.STATUS -> {
+                speakVoiceReply(viewModel.voiceStatusMessage())
+                return
+            }
+            VoiceCommand.QUESTION -> Unit
+        }
+        val pack = currentVoicePack()
+        lifecycleScope.launch {
+            val started = System.currentTimeMillis()
+            val result: Result<String> = try {
+                withTimeout(45_000) {
+                    agent.answerIncidentQuestion(transcript, pack)
+                }
+            } catch (e: TimeoutCancellationException) {
+                Result.failure(IllegalStateException("The on-device model did not answer in time."))
+            } catch (t: Throwable) {
+                Result.failure(t)
+            }
+            val elapsed = System.currentTimeMillis() - started
+            result.fold(
+                onSuccess = { answer ->
+                    speakVoiceReply(answer)
+                    viewModel.addLog("[Voice] Answered in ${elapsed}ms")
+                },
+                onFailure = { err ->
+                    viewModel.onVoiceFailed(
+                        err.message ?: "On-device model could not answer. Text path failed; nothing was sent off-device."
+                    )
+                }
+            )
+        }
+    }
+
+    private fun speakVoiceReply(text: String) {
+        viewModel.onVoiceAnswer(text)
+        val voice = viewModel.uiState.value.voice
+        if (!voice.muted && voice.ttsAvailable) {
+            deviceTts?.speak(text)
+        }
+    }
+
+    private fun currentVoicePack(): IncidentVoicePack {
+        val state = viewModel.uiState.value
+        val result = state.currentResult
+        val candidate = state.selectedPipeline?.candidate
+        return IncidentVoicePack(
+            incidentId = state.activeIncidentId ?: result?.incidentId,
+            rootCause = state.rootCause ?: result?.rootCause,
+            confidence = result?.confidence ?: candidate?.confidence,
+            reasoning = result?.reasoning ?: candidate?.reasoning,
+            file = result?.repairFile ?: candidate?.repairFile,
+            line = result?.repairLine ?: candidate?.repairLine,
+            originalLine = result?.originalLine ?: candidate?.originalLine,
+            repairCode = result?.repairCode ?: candidate?.repairCode,
+            diffText = result?.diffText ?: candidate?.diffText,
+            evidence = result?.rawOutput
+        )
+    }
 
     private fun initAgent() {
         lifecycleScope.launch {
+            val modelName = modelManager.getActiveDisplayName()
+            viewModel.setModelDisplayName(modelName)
+            viewModel.setBootLine(
+                "Loading $modelName",
+                "On-device weights into memory",
+                step = 0,
+                modelName = modelName
+            )
             try {
-                agent.initModel()
+                withContext(Dispatchers.IO) { agent.initModel() }
                 val ready = agent.isEngineReady()
-                val savedDevice = securePrefs.getString("paired_device_name", "Developer Machine") ?: "Developer Machine"
-                val connected = relayService?.isConnected() ?: false
-                viewModel.updateStatus(ready, connected, if (connected) savedDevice else "Not Connected")
                 if (ready) {
-                    viewModel.addLog("Local AI Engine initialized and ready.")
+                    viewModel.setBootLine(
+                        "$modelName ready",
+                        "Engine loaded",
+                        step = 0,
+                        modelName = modelName
+                    )
+                    viewModel.addLog("$modelName initialized and ready.")
                 } else {
+                    viewModel.setBootLine(
+                        "Model file not loaded",
+                        "Push a MediaPipe .bin and select it in Settings → On-device model. Heuristic fallback is active.",
+                        failed = true,
+                        step = 0,
+                        modelName = modelName
+                    )
                     viewModel.addLog("Offline heuristic engine active.")
                 }
+                val savedDevice = securePrefs.getString("paired_device_name", "Developer Machine") ?: "Developer Machine"
+                viewModel.setBootLine("Connecting to laptop", savedDevice, step = 1, modelName = modelName)
+                startRelayService()
+                val waitCap = if (openFromIncident) 1500 else 8000
+                var waited = 0
+                while (waited < waitCap && relayService?.isConnected() != true) {
+                    delay(250)
+                    waited += 250
+                }
+                val connected = relayService?.isConnected() ?: false
+                viewModel.updateStatus(ready, connected, if (connected) savedDevice else "Not Connected")
+                if (!connected) {
+                    viewModel.setBootLine(
+                        "Laptop not reached",
+                        "Wi-Fi relay is offline or not paired. Pair from Settings. Continuing.",
+                        failed = true,
+                        step = 1,
+                        modelName = modelName
+                    )
+                    delay(if (openFromIncident) 400 else 1200)
+                }
             } catch (e: Exception) {
+                viewModel.setBootLine("Startup issue", e.message ?: "Unknown error", failed = true)
                 viewModel.addLog("Offline fallback active: ${e.message}")
+                delay(if (openFromIncident) 400 else 1200)
             }
+            if (openFromIncident) {
+                viewModel.setScreen(AppScreen.REPAIR)
+            }
+            viewModel.finishBoot()
         }
     }
 
@@ -381,14 +629,26 @@ class MainActivity : ComponentActivity() {
                 "sandbox_done" -> viewModel.setSandboxRunning(false)
                 "brain_ready" -> {
                     val tests = json.stringList("tests")
+                    val edges = mutableListOf<com.devdeck.app.ui.BrainEdge>()
+                    json.optJSONArray("edges")?.let { arr ->
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            val src = obj.optString("src")
+                            val dst = obj.optString("dst")
+                            if (src.isNotBlank() && dst.isNotBlank()) {
+                                edges.add(com.devdeck.app.ui.BrainEdge(src, dst, obj.optString("kind", "import")))
+                            }
+                        }
+                    }
                     viewModel.setBrainReady(
                         filesIndexed = json.optInt("files_indexed"),
                         symbolsIndexed = json.optInt("symbols_indexed"),
                         testsDiscovered = json.optInt("tests_discovered"),
                         projectRoot = json.optString("project_root"),
-                        tests = tests
+                        tests = tests,
+                        sampleSymbols = json.stringList("sample_symbols"),
+                        edges = edges
                     )
-                    viewModel.mergeBrainFromIncident(json.stringList("sample_symbols"), emptyList())
                     val root = json.optString("project_root")
                     if (root.isNotBlank()) viewModel.setActiveProject(root)
                 }
@@ -506,13 +766,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIncident(json: JSONObject, developerConstraint: String? = null) {
+        val incidentId = json.optString("incident_id")
+        if (incidentId.isNotBlank() && !diagnosisStarted.add(incidentId) && developerConstraint == null) {
+            viewModel.setScreen(AppScreen.REPAIR)
+            return
+        }
         lifecycleScope.launch {
             try {
                 val errorTrace = json.getString("error_text")
-                val sourceContext: String? = if (json.has("source_context")) json.getString("source_context") else null
-                val errorFile = json.optString("error_file", "unknown")
-                val errorLine = if (json.isNull("error_line")) -1 else json.optInt("error_line", -1)
-                val originalLine = json.optString("original_line", "")
+                val sourceContext: String? = json.optUsableString("source_context")
+                val errorFile = json.optUsableString("error_file") ?: "unknown"
+                val errorLineRaw = if (json.isNull("error_line")) null else json.optInt("error_line", 0).takeIf { it > 0 }
+                val originalRaw = json.optUsableString("original_line")
+                val recovered = com.devdeck.app.ai.IncidentSource.recover(errorTrace, sourceContext, originalRaw, errorLineRaw)
+                val originalLine = recovered.first ?: ""
+                val errorLine = recovered.second ?: -1
                 val incidentId = json.optString("incident_id")
                 val projectId = json.optString("project_id")
                 val expectedSha = json.optString("expected_sha256").takeIf { it.isNotBlank() }
@@ -544,16 +812,30 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // 1. Diagnosing Stage
-                viewModel.applyPipelineEvent(PipelineEvent(incidentId, PipelineStage.DIAGNOSING, EventPhase.STARTED, "Gemma-2B-IT running", detail = developerConstraint))
+                viewModel.applyPipelineEvent(
+                    PipelineEvent(
+                        incidentId,
+                        PipelineStage.DIAGNOSING,
+                        EventPhase.STARTED,
+                        "${viewModel.uiState.value.modelDisplayName} running",
+                        detail = developerConstraint
+                    )
+                )
                 
-                val (result, _) = agent.analyzeError(
-                    errorTrace, sourceContext, errorFile, errorLine, originalLine, expectedSha, incidentId,
+                val (rawResult, _) = agent.analyzeError(
+                    errorTrace, sourceContext, errorFile, errorLine.takeIf { it > 0 }, originalLine, expectedSha, incidentId,
                     projectId, repoContext, symbols, developerConstraint
+                )
+                val result = rawResult.copy(
+                    repairLine = rawResult.repairLine?.takeIf { it > 0 } ?: errorLine.takeIf { it > 0 },
+                    originalLine = com.devdeck.app.ai.IncidentSource.usableLine(rawResult.originalLine)
+                        ?: originalLine.ifBlank { null },
+                    repairFile = rawResult.repairFile?.takeIf { it.isNotBlank() && it != "unknown" } ?: errorFile
                 )
 
                 if (result.abstained || (
                     result.patchType == com.devdeck.app.model.PatchType.SINGLE_LINE &&
-                        (result.repairLine == null || result.repairLine < 1 || result.repairCode.isNullOrBlank())
+                        (result.repairLine == null || result.repairLine!! < 1 || result.repairCode.isNullOrBlank())
                     ) || (
                     result.patchType == com.devdeck.app.model.PatchType.DIFF && result.diffText.isNullOrBlank()
                     )
@@ -564,7 +846,11 @@ class MainActivity : ComponentActivity() {
                             PipelineStage.DIAGNOSING,
                             EventPhase.FAILED,
                             result.fix.ifBlank { "No safe patch could be synthesized for this failure" },
-                            detail = result.reasoning ?: result.rootCause
+                            detail = listOfNotNull(
+                                result.rootCause.takeIf { it.isNotBlank() },
+                                result.reasoning,
+                                result.rawOutput?.take(400)
+                            ).distinct().joinToString("\n").ifBlank { null }
                         )
                     )
                     return@launch
@@ -606,6 +892,7 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 val id = json.optString("incident_id")
                 if (id.isNotBlank()) {
+                    diagnosisStarted.remove(id)
                     viewModel.applyPipelineEvent(
                         PipelineEvent(id, PipelineStage.DIAGNOSING, EventPhase.FAILED, "Diagnosis failed: ${e.message ?: "unknown error"}")
                     )
@@ -706,6 +993,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun JSONObject.optUsableString(key: String): String? {
+        if (!has(key) || isNull(key)) return null
+        val value = optString(key, "")
+        return com.devdeck.app.ai.IncidentSource.usableLine(value)
+    }
+
     private fun JSONObject.stringList(key: String): List<String> {
         val arr = optJSONArray(key) ?: return emptyList()
         return (0 until arr.length()).mapNotNull { i ->
@@ -718,6 +1011,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         try {
+            voskSession?.release()
+            deviceTts?.shutdown()
             relayService?.removeListener(relayListener)
             unbindService(serviceConnection)
         } catch (e: Exception) {
