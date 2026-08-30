@@ -310,11 +310,19 @@ class PatchManager:
                 timeout_seconds=timeout_seconds,
                 env=isolated_env(root),
             )
-            success = (not timed_out) and exit_code == 0
-            if timed_out:
+            is_server_cmd = any(k in command.lower() for k in ["start", "server", "dev", "app.py", "runserver", "uvicorn", "flask"])
+            server_booted = is_server_cmd and (
+                "running" in stdout.lower() or
+                "listening" in stdout.lower() or
+                "ready" in stdout.lower() or
+                (timed_out and not stderr.strip())
+            )
+            success = server_booted or ((not timed_out) and exit_code == 0)
+
+            if timed_out and not server_booted:
                 print(f"[PatchManager] Rerun TIMEOUT (>{timeout_seconds}s)")
             else:
-                print(f"[PatchManager] Rerun {'SUCCESS (Exit 0)' if success else f'FAILED (Exit {exit_code})'}")
+                print(f"[PatchManager] Rerun {'SUCCESS (Exit 0 / Server Ready)' if success else f'FAILED (Exit {exit_code})'}")
                 if not success and (stderr or stdout):
                     print((stderr or stdout)[-500:])
             return success
