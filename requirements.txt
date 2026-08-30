@@ -1,0 +1,3 @@
+﻿# DevDeck Laptop Bridge & Runtime Dependencies
+websockets>=11.0
+qrcode>=7.4
