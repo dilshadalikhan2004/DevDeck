@@ -168,6 +168,19 @@ class SandboxVerifier:
                 else:
                     shutil.copy2(item, dest)
 
+            # Link host node_modules into sandbox for zero-copy module resolution
+            orig_node_modules = root.path / "node_modules"
+            if orig_node_modules.is_dir():
+                target_nm = sandbox_root / "node_modules"
+                try:
+                    import sys, subprocess
+                    if sys.platform == "win32":
+                        subprocess.run(["cmd", "/c", "mklink", "/J", str(target_nm), str(orig_node_modules)], capture_output=True, timeout=3)
+                    else:
+                        os.symlink(str(orig_node_modules), str(target_nm))
+                except Exception:
+                    pass
+
             sandbox_target = sandbox_copy_of_target(root.path, sandbox_root, target_file)
             sandbox_passed = False
             stdout = ""
@@ -204,7 +217,10 @@ class SandboxVerifier:
                     emit("PASS tests/core/memory-limits.spec.js")
                     emit("PASS tests/plugins/loader-integrity.spec.js")
 
-                    env = isolated_env(sandbox_root)
+                    extra_env = {}
+                    if orig_node_modules.is_dir():
+                        extra_env["NODE_PATH"] = str(orig_node_modules.resolve())
+                    env = isolated_env(sandbox_root, extra=extra_env)
                     exit_code, stdout, stderr, timed_out, duration_ms = run_command_isolated(
                         command,
                         cwd=sandbox_root,
