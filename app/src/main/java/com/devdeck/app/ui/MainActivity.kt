@@ -515,6 +515,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initAgent() {
+        if (!viewModel.uiState.value.boot.visible) {
+            // Boot was already completed in this session; just ensure service and status are synced
+            lifecycleScope.launch {
+                startRelayService()
+                val ready = agent.isEngineReady()
+                val savedDevice = securePrefs.getString("paired_device_name", "Developer Machine") ?: "Developer Machine"
+                val connected = relayService?.isConnected() ?: false
+                viewModel.updateStatus(ready, connected, if (connected) savedDevice else "Not Connected")
+            }
+            return
+        }
+
         lifecycleScope.launch {
             val modelName = modelManager.getActiveDisplayName()
             viewModel.setModelDisplayName(modelName)
