@@ -47,6 +47,78 @@ repair_memory = RepairMemory(Path.cwd())
 STATE_DIR = os.environ.get("DEVDECK_STATE_DIR", ".devdeck")
 pairing_registry = PairingRegistry(os.path.join(STATE_DIR, "pairing_state.json"))
 PAIRING_SECRET = os.environ.get("DEVDECK_PAIRING_SECRET", "DECK-POCKET-SAFE")
+current_pairing_data = {}
+
+
+def generate_pairing_html(pairing_data: dict) -> str:
+    """Generate a clean, zero-dependency browser pairing portal with embedded SVG QR Code."""
+    pairing_json = json.dumps(pairing_data)
+    svg_html = ""
+    if HAS_QRCODE:
+        try:
+            import qrcode.image.svg
+            import io
+            factory = qrcode.image.svg.SvgPathImage
+            img = qrcode.make(pairing_json, image_factory=factory, box_size=8)
+            stream = io.BytesIO()
+            img.save(stream)
+            svg_html = stream.getvalue().decode("utf-8")
+        except Exception:
+            pass
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevDeck • Device Pairing</title>
+<style>
+  :root {{ --bg: #090d16; --card: #111827; --border: #1f2937; --accent: #38bdf8; --text: #f9fafb; --muted: #9ca3af; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+  .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 36px; max-width: 440px; width: 100%; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); }}
+  .logo {{ font-size: 28px; margin-bottom: 4px; }}
+  h1 {{ font-size: 22px; font-weight: 700; margin: 0 0 8px; }}
+  p.sub {{ color: var(--muted); font-size: 14px; margin: 0 0 24px; }}
+  .qr-container {{ background: #ffffff; padding: 16px; border-radius: 16px; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.3); margin-bottom: 20px; }}
+  .qr-container svg {{ display: block; max-width: 240px; max-height: 240px; width: 100%; height: auto; }}
+  .badge {{ display: inline-flex; align-items: center; gap: 8px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.2); color: #4ade80; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 9999px; margin-bottom: 24px; }}
+  .dot {{ width: 8px; height: 8px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 8px #22c55e; }}
+  .details {{ background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 12px; padding: 14px; text-align: left; font-family: monospace; font-size: 13px; margin-bottom: 16px; }}
+  .row {{ display: flex; justify-content: space-between; margin-bottom: 6px; }}
+  .row:last-child {{ margin-bottom: 0; }}
+  .lbl {{ color: var(--muted); }}
+  .val {{ color: var(--accent); font-weight: 600; }}
+  .tip {{ font-size: 12px; color: var(--muted); line-height: 1.5; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">⚡</div>
+  <h1>Pair with DevDeck Pocket</h1>
+  <p class="sub">Open DevDeck on your phone and scan this code</p>
+  
+  <div class="qr-container">
+    {svg_html if svg_html else f'<p style="color:#000;font-size:12px;word-break:break-all;">{pairing_json}</p>'}
+  </div>
+
+  <div>
+    <span class="badge"><span class="dot"></span> Bridge Online (Port {pairing_data.get("url", "").split(":")[-1]})</span>
+  </div>
+
+  <div class="details">
+    <div class="row"><span class="lbl">Host:</span><span class="val">{pairing_data.get("device_name", "Developer Machine")}</span></div>
+    <div class="row"><span class="lbl">WebSocket:</span><span class="val">{pairing_data.get("url", "ws://127.0.0.1:8765")}</span></div>
+    <div class="row"><span class="lbl">Secret:</span><span class="val">{pairing_data.get("secret", "DECK-POCKET-SAFE")}</span></div>
+  </div>
+
+  <div class="tip">
+    💡 USB connected? Run <code>adb reverse tcp:8765 tcp:8765</code> for zero-config bridge.
+  </div>
+</div>
+</body>
+</html>
+"""
 
 
 def repair_for_incident(payload, incident_store):
@@ -514,6 +586,15 @@ class HookHTTPHandler(http.server.BaseHTTPRequestHandler):
         pass  # quiet logs
 
     def do_GET(self):
+        if self.path in ("/", "/pair", "/pair/", "/qrcode"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            html = generate_pairing_html(current_pairing_data)
+            self.wfile.write(html.encode("utf-8"))
+            return
+
         if self.path in ("/health", "/status", "/health/", "/status/"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -523,7 +604,8 @@ class HookHTTPHandler(http.server.BaseHTTPRequestHandler):
                 "status": "online",
                 "paired_clients": len(connected_clients),
                 "host": socket.gethostname(),
-                "os": platform.system()
+                "os": platform.system(),
+                "pairing_url": f"http://{current_pairing_data.get('host', 'localhost')}:8766/pair"
             })
             self.wfile.write(resp.encode())
         else:
@@ -629,6 +711,8 @@ async def main():
         "host": hostname,
         "os": os_name,
     }
+    global current_pairing_data
+    current_pairing_data = pairing_data
     pairing_json = json.dumps(pairing_data)
 
     print("=" * 65)
@@ -636,6 +720,7 @@ async def main():
     print(f"• Host Device: {device_label}")
     print(f"• WebSocket Bridge: ws://localhost:{port} / ws://0.0.0.0:{port}")
     print(f"• Terminal Hook HTTP: http://127.0.0.1:{http_port}/incident")
+    print(f"• Pairing Web Portal: http://localhost:{http_port}/pair (or http://{primary_ip}:{http_port}/pair)")
     print(f"• Local Network IP: {primary_ip}")
     print(f"• Autonomy Policy: {repair_memory.get_policy().level.value}")
     print(f"• Pairing Secret: {PAIRING_SECRET}")
