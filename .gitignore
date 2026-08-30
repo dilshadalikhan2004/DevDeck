@@ -17,3 +17,4 @@ crash_log.txt
 .worktrees/
 app/src/main/assets/vosk/*.zip
 
+dist/
