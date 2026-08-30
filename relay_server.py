@@ -159,6 +159,7 @@ async def broadcast(message_dict, exclude=None):
 
 
 async def relay(websocket):
+    global last_brain_data
     addr = websocket.remote_address
     connected_clients.add(websocket)
     print(f"[Relay] Connected: {addr}. Total clients: {len(connected_clients)}")
@@ -211,7 +212,6 @@ async def relay(websocket):
 
                 # 1.2 Brain Ready Event
                 if msg_type == "brain_ready":
-                    global last_brain_data
                     last_brain_data = data
                     print(f"🧠 [Relay] Project Brain Ready ({data.get('files_indexed')} files, {data.get('symbols_indexed')} symbols)")
                     await broadcast(data, exclude=websocket)
@@ -632,6 +632,10 @@ class HookHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(b'{"status":"accepted","dispatched":true}')
+            except Exception as e:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(str(e).encode())
         elif self.path in ("/brain", "/brain/"):
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length).decode("utf-8", errors="replace")
