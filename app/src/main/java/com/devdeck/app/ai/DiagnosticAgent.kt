@@ -517,6 +517,21 @@ internal object HeuristicDiagnosticEngine {
         var repairCode: String? = null
 
         when {
+            // Express: app.use() requires a middleware function
+            "requires a middleware function" in normalized || ("app.use" in normalized && "middleware" in normalized) -> {
+                cause = "Express app.use() requires a middleware function, but received an object or undefined."
+                fix = "Extract the middleware function from the imported object or handle fallback."
+                if (cleanOrig != null) {
+                    val matchUse = Regex("""app\.use\(\s*([a-zA-Z0-9_]+)\s*\)""").find(cleanOrig)
+                    if (matchUse != null) {
+                        val name = matchUse.groupValues[1]
+                        repairCode = "app.use($name.$name || $name);"
+                    } else {
+                        repairCode = cleanOrig
+                    }
+                }
+            }
+
             // TypeError: concatenate NoneType / int to str, or any TypeError with + on the line
             "typeerror" in normalized -> {
                 cause = "Type mismatch at runtime."
