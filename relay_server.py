@@ -676,7 +676,7 @@ def start_http_server(host: str = "0.0.0.0", http_port: int = 8766):
         return None
 
 
-async def main():
+async def main(open_browser: bool = False):
     global main_loop
     main_loop = asyncio.get_running_loop()
 
@@ -746,6 +746,22 @@ async def main():
 
     print("\n💡 Alternatively, use ADB reverse: adb reverse tcp:8765 tcp:8765")
     print("=" * 65)
+
+    if open_browser:
+        import webbrowser
+        try:
+            threading.Timer(0.5, lambda: webbrowser.open(f"http://localhost:{http_port}/pair")).start()
+        except Exception:
+            pass
+
+    # Try automatic ADB reverse for USB-connected Android devices
+    try:
+        import shutil
+        adb_bin = shutil.which("adb")
+        if adb_bin:
+            subprocess.run([adb_bin, "reverse", "tcp:8765", "tcp:8765"], capture_output=True, timeout=2)
+    except Exception:
+        pass
 
     async with websockets.serve(relay, host, port):
         await asyncio.Future()  # Run forever

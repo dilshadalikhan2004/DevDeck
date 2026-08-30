@@ -874,7 +874,7 @@ def cli_entry():
     if len(sys.argv) < 2:
         print("DevDeck Transparent Repair Runtime")
         print("Usage:")
-        print("  devdeck relay              # Start WebSocket/HTTP bridge & QR portal")
+        print("  devdeck pair               # ⚡ One-line QR code generator & instant pairing")
         print("  devdeck scan [path]        # Index local codebase into Knowledge Graph")
         print("  devdeck link <repo_url>    # Clone & link remote GitHub repo")
         print("  devdeck sync [path]        # Sync changes and update Knowledge Graph")
@@ -888,10 +888,11 @@ def cli_entry():
         sys.exit(1)
 
     command_type = sys.argv[1].lower()
-    if command_type in ("relay", "bridge", "server"):
+    if command_type in ("pair", "qr", "relay", "bridge", "server"):
         from relay_server import main as run_relay
+        auto_open = command_type in ("pair", "qr") or "--open" in sys.argv
         try:
-            asyncio.run(run_relay())
+            asyncio.run(run_relay(open_browser=auto_open))
         except KeyboardInterrupt:
             print("\n[Relay] Server shut down.")
         sys.exit(0)
